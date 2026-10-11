@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/hero.png" alt="qwen-code-claude-runtime" width="720">
+<img src="docs/assets/hero.svg" alt="qwen-code-claude-runtime: run Qwen Code turns on your own local Claude Code CLI" width="720">
 
 # qwen-code-claude-runtime
 
@@ -55,14 +55,14 @@ See [SECURITY.md](SECURITY.md).
 ```mermaid
 flowchart LR
     Q["Qwen Code"] -- "OpenAI chat.completions" --> S
-    subgraph qcr["qcr (127.0.0.1, bearer token)"]
-        S["shim"]
-        M["qwen-skills MCP server<br/>(read-only)"]
+    subgraph qcr["qcr"]
+        S["qcr serve<br/>(127.0.0.1, bearer token)"]
+        M["qcr mcp-skills<br/>(stdio, read-only)"]
     end
     S -- "spawn, no shell<br/>prompt on stdin" --> C["claude -p<br/>--output-format stream-json"]
     C -- "stream-json events" --> S
     S -- "OpenAI SSE<br/>delta.content + usage" --> Q
-    C -. "MCP (stdio)<br/>qwen_skill, qwen_skill_file" .-> M
+    C -. "spawns, MCP over stdio<br/>qwen_skill, qwen_skill_file" .-> M
     M -. "reads" .-> K[".qwen/skills<br/>.agents/skills"]
 ```
 
@@ -87,18 +87,13 @@ Qwen Code already supports. Qwen Code needs no patch. For each turn, `qcr` does 
 * Turns failures into clear errors: `claude` not installed, not logged in, quota exhausted (with the reset time),
   unknown model.
 
-The design borrows from OpenClaw's `claude-cli` agent runtime ([openclaw/openclaw](https://github.com/openclaw/openclaw),
-MIT): treating the CLI as a runtime behind a model id, using stream-json I/O, removing `ANTHROPIC_*` variables from
-the child environment, and passing MCP servers via `--mcp-config`. No OpenClaw code is copied.
-
-
 <details>
 <summary><b>Per-turn sequence</b></summary>
 
 ```mermaid
 sequenceDiagram
     participant Q as Qwen Code
-    participant S as qcr shim
+    participant S as qcr serve
     participant C as claude CLI
     Q->>S: POST /v1/chat/completions (stream)
     S->>C: spawn claude -p (stream-json in/out)
@@ -153,7 +148,7 @@ agent turns may also need `QWEN_STREAM_MAX_LIFETIME_MS=0` in the environment whe
 caps a single stream at 15 minutes by default.
 
 
-## ⚙️ Configuration
+## 🔧 Configuration
 
 <details>
 <summary><b>qcr serve environment variables</b></summary>
