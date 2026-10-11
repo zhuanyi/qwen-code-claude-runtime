@@ -1,24 +1,69 @@
+<div align="center">
+
+<img src="docs/assets/hero.png" alt="qwen-code-claude-runtime" width="720">
+
 # qwen-code-claude-runtime
+
+**Run [Qwen Code](https://github.com/QwenLM/qwen-code) turns on your own local Claude Code CLI.**
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
+[![Node >=20](https://img.shields.io/badge/node-%3E%3D20-339933?style=flat-square&logo=node.js&logoColor=white)](package.json)
+[![GitHub stars](https://img.shields.io/github/stars/zhuanyi/qwen-code-claude-runtime?style=flat-square)](https://github.com/zhuanyi/qwen-code-claude-runtime/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/zhuanyi/qwen-code-claude-runtime?style=flat-square)](https://github.com/zhuanyi/qwen-code-claude-runtime/commits/main)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](https://github.com/zhuanyi/qwen-code-claude-runtime/pulls)
+
+[Quick start](#-quick-start) · [How it works](#-how-it-works) · [Configuration](#-configuration) · [Security](SECURITY.md) · [Design](docs/PLAN.md)
+
+</div>
+
+---
 
 Use Claude Code as a switchable runtime inside [Qwen Code](https://github.com/QwenLM/qwen-code). Pick it like
 any other model (`/model claude-code/sonnet`). The turn then runs through **your own installed `claude` CLI**,
 on your own login or subscription. Claude Code runs the tools itself (Read, Edit, Bash, …), and its streamed
 text, tool progress, token usage and errors appear in Qwen Code. Switch back to a Qwen model at any time.
 
-Status: **MVP / early development**. Design: [`docs/PLAN.md`](docs/PLAN.md). Review record:
-[`docs/REVIEW.md`](docs/REVIEW.md). Manual test checklist: [`docs/E2E.md`](docs/E2E.md).
+> Status: **MVP / early development**. Design: [`docs/PLAN.md`](docs/PLAN.md). Review record:
+> [`docs/REVIEW.md`](docs/REVIEW.md). Manual test checklist: [`docs/E2E.md`](docs/E2E.md).
 
-## Credentials policy
+## 🤔 Why
+
+* Keep Qwen Code's UI and workflow while letting Claude Code do the work for a given turn.
+* No patch to Qwen Code: `qcr` speaks the OpenAI chat-completions protocol that Qwen Code already supports.
+* No credential handling: the official `claude` binary uses its own login. See the policy below.
+
+## ✨ Features
+
+* 🔌 **Drop-in model**: a local OpenAI-compatible server on `127.0.0.1`, protected by a bearer token.
+* 🛠️ **Claude runs the tools**: tool calls are shown as progress lines; `qcr` never returns `tool_calls`, so Qwen does not run them twice.
+* 📡 **Streaming**: Claude's text arrives as `delta.content`, with token usage and a cost footer.
+* 🧵 **Session continuity**: later turns use `claude --resume <id> --fork-session`; existing history is passed as quoted context.
+* 🧰 **Skills bridge**: Qwen skills are exposed to Claude via a read-only MCP server (`qwen-skills`).
+* 🔗 **MCP passthrough**: your Qwen `mcpServers` are handed to `claude --mcp-config`.
+* 🚦 **Clear errors**: `claude` missing, not logged in, quota exhausted (with reset time), unknown model.
+* 🔒 **Safe defaults**: no shell spawn, prompt over stdin, `bypassPermissions` refused, `ANTHROPIC_*` stripped from the child env.
+
+## 🔐 Credentials policy
 
 This project only spawns the official `claude` binary as a subprocess and lets it use its own login.
 It **never** reads, copies, proxies or extracts Claude OAuth tokens or other credentials, never touches
 `~/.claude` credential files or the OS keychain, and never calls `api.anthropic.com` itself.
 See [SECURITY.md](SECURITY.md).
 
-## How it works
+## 🧭 How it works
 
-```
-qwen ──OpenAI chat.completions (SSE)──▶ qcr (127.0.0.1, bearer token) ──spawn, no shell──▶ claude -p --output-format stream-json …
+```mermaid
+flowchart LR
+    Q["Qwen Code"] -- "OpenAI chat.completions" --> S
+    subgraph qcr["qcr (127.0.0.1, bearer token)"]
+        S["shim"]
+        M["qwen-skills MCP server<br/>(read-only)"]
+    end
+    S -- "spawn, no shell<br/>prompt on stdin" --> C["claude -p<br/>--output-format stream-json"]
+    C -- "stream-json events" --> S
+    S -- "OpenAI SSE<br/>delta.content + usage" --> Q
+    C -. "MCP (stdio)<br/>qwen_skill, qwen_skill_file" .-> M
+    M -. "reads" .-> K[".qwen/skills<br/>.agents/skills"]
 ```
 
 `qcr` is a small, dependency-free local server that speaks the OpenAI chat-completions protocol, which stock
@@ -46,7 +91,26 @@ The design borrows from OpenClaw's `claude-cli` agent runtime ([openclaw/opencla
 MIT): treating the CLI as a runtime behind a model id, using stream-json I/O, removing `ANTHROPIC_*` variables from
 the child environment, and passing MCP servers via `--mcp-config`. No OpenClaw code is copied.
 
-## Quick start
+
+<details>
+<summary><b>Per-turn sequence</b></summary>
+
+```mermaid
+sequenceDiagram
+    participant Q as Qwen Code
+    participant S as qcr shim
+    participant C as claude CLI
+    Q->>S: POST /v1/chat/completions (stream)
+    S->>C: spawn claude -p (stream-json in/out)
+    C-->>S: text, tool progress, usage
+    S-->>Q: SSE delta.content (+ progress lines)
+    C-->>S: result (cost, session id)
+    S-->>Q: usage + footer, [DONE]
+```
+
+</details>
+
+## 🚀 Quick start
 
 Requirements: Node ≥ 20, Qwen Code, and Claude Code (`claude`) installed and logged in. Run `claude` once
 interactively and complete `/login`.
@@ -88,7 +152,11 @@ Then, in Qwen Code, run `/model claude-code/sonnet` (or pick it from `/model`) a
 agent turns may also need `QWEN_STREAM_MAX_LIFETIME_MS=0` in the environment where `qwen` runs, because Qwen
 caps a single stream at 15 minutes by default.
 
-## Configuration (`qcr serve` environment)
+
+## ⚙️ Configuration
+
+<details>
+<summary><b>qcr serve environment variables</b></summary>
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -111,7 +179,9 @@ caps a single stream at 15 minutes by default.
 denied (`--permission-prompts none`). Denials are reported in the reply with a hint. Allow what you need with
 `QCR_ALLOWED_TOOLS`, your Claude settings, or `QCR_PERMISSION_MODE=acceptEdits`.
 
-## Known gaps (MVP)
+</details>
+
+## 🚧 Known gaps (MVP)
 
 * Qwen skills are exposed to Claude through a local MCP server (see above). Qwen *tools* are not yet exposed, and
   extension, bundled and custom skill directories are not yet discovered.
@@ -122,13 +192,19 @@ denied (`--permission-prompts none`). Denials are reported in the reply with a h
 * Only one project directory per `qcr` process.
 * No images or attachments. No interactive permission prompts.
 
-## Development
+## 🧪 Development
 
 ```bash
 npm test     # unit + integration tests; uses test/fake-claude.js, never the real CLI
 ```
 
-## Licence
+## 🙏 Acknowledgements
+
+The design borrows from OpenClaw's `claude-cli` agent runtime ([openclaw/openclaw](https://github.com/openclaw/openclaw),
+MIT): treating the CLI as a runtime behind a model id, using stream-json I/O, removing `ANTHROPIC_*` variables from
+the child environment, and passing MCP servers via `--mcp-config`. No OpenClaw code is copied.
+
+## 📄 Licence
 
 MIT. Qwen Code is Apache-2.0; this repository contains no Qwen Code source. Claude Code is a product of Anthropic and is
 used here only as an external program that the user installs themselves.
