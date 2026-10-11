@@ -37,17 +37,30 @@ export function parseJsonc(src) {
   return JSON.parse(res);
 }
 
-/** @param {{cwd: string, home: string}} p */
-export function loadQwenMcpServers({ cwd, home }) {
+/**
+ * User-scope servers always; project-scope (`<cwd>/.qwen/settings.json`) only when `projectMcp` is set.
+ * User wins on a name clash, and project servers never keep `trust`.
+ * @param {{cwd: string, home: string, projectMcp?: boolean}} p
+ */
+export function loadQwenMcpServers({ cwd, home, projectMcp = false }) {
   /** @type {Record<string, any>} */ const servers = {};
   /** @type {string[]} */ const warnings = [];
-  for (const base of [home, cwd]) {
+  for (const [base, project] of /** @type {[string, boolean][]} */ ([[home, false], [cwd, true]])) {
     const file = path.join(base, '.qwen', 'settings.json');
     let text;
     try { text = fs.readFileSync(file, 'utf8'); } catch { continue; }
+    if (project && !projectMcp) {
+      if (text.includes('mcpServers')) warnings.push(`ignoring MCP servers in ${file}; set QCR_PROJECT_MCP=1 to use project MCP servers`);
+      continue;
+    }
     try {
       const s = parseJsonc(text);
-      if (s && typeof s.mcpServers === 'object' && s.mcpServers) Object.assign(servers, s.mcpServers);
+      if (!s || typeof s.mcpServers !== 'object' || !s.mcpServers) continue;
+      for (const [name, cfg] of Object.entries(s.mcpServers)) {
+        if (!project) { servers[name] = cfg; continue; }
+        if (name in servers) { warnings.push(`project MCP server "${name.slice(0, 40)}" ignored: a user-scope server has the same name`); continue; }
+        servers[name] = cfg && typeof cfg === 'object' ? { ...cfg, trust: false } : cfg;
+      }
     } catch {
       warnings.push(`could not parse ${file}; ignoring it`);
     }

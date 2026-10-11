@@ -38,14 +38,18 @@ export function splitForResume(messages) {
  */
 export function renderTranscript(messages, maxBytes = 40000, perMessage = 2000) {
   const lines = [];
+  const first = messages.find((m) => m.role === 'user');
   for (const m of messages) {
     if (m.role === 'system') continue;
     const label = m.role === 'tool' ? 'tool result' : m.role;
-    let t = normalize(messageText(m));
+    let t = messageText(m).replace(/\r\n/g, '\n').trim();
     if (!t) continue;
-    if (t.length > perMessage) t = t.slice(0, perMessage) + '…[truncated]';
+    t = t.replace(/<\/?prior_conversation/gi, '‹prior_conversation').replace(/^(\[(?:user|assistant|tool result|system)\]:)/gim, '│ $1');
+    const cap = m === first ? Math.max(perMessage, 20000) : perMessage;
+    if (t.length > cap) t = t.slice(0, cap) + '…[truncated]';
     lines.push(`[${label}]: ${t}`);
   }
+  if (!lines.length) return '';
   const kept = [];
   let size = 0;
   for (let i = lines.length - 1; i >= 0; i--) {

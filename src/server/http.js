@@ -43,7 +43,13 @@ export async function startServer(cfg, { port = 8787, host = '127.0.0.1', token,
       let size = 0;
       for await (const c of req) {
         size += c.length;
-        if (size > MAX_BODY) return json(413, errorBody('payload_too_large', 'Body too large'), 'payload_too_large');
+        if (size > MAX_BODY) {
+          // Flush the 413 before the loop exit destroys the request, so the client can read it.
+          res.setHeader('connection', 'close');
+          json(413, errorBody('payload_too_large', 'Body too large'), 'payload_too_large');
+          await new Promise((r) => { if (res.writableFinished) r(undefined); else res.once('finish', () => r(undefined)); });
+          return;
+        }
         chunks.push(c);
       }
       let body;

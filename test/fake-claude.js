@@ -1,10 +1,18 @@
 #!/usr/bin/env node
 // Fake `claude` for tests. Behaviour is driven by FAKE_CLAUDE_* env vars (see README in fixtures/).
 import fs from 'node:fs';
+import { spawn } from 'node:child_process';
 
 const argv = process.argv.slice(2);
 const env = process.env;
 if (env.FAKE_CLAUDE_ARGV_LOG) fs.appendFileSync(env.FAKE_CLAUDE_ARGV_LOG, JSON.stringify(argv) + '\n');
+if (env.FAKE_CLAUDE_PID_FILE) fs.writeFileSync(env.FAKE_CLAUDE_PID_FILE, String(process.pid));
+const si = argv.indexOf('--system-prompt-file');
+if (env.FAKE_CLAUDE_SYSPROMPT_LOG && si >= 0) fs.appendFileSync(env.FAKE_CLAUDE_SYSPROMPT_LOG, fs.readFileSync(argv[si + 1], 'utf8') + '\n');
+// A grandchild that keeps our stdout open after we exit.
+if (env.FAKE_CLAUDE_GRANDCHILD_MS) {
+  spawn(process.execPath, ['-e', `setTimeout(() => {}, ${Number(env.FAKE_CLAUDE_GRANDCHILD_MS)})`], { stdio: ['ignore', 'inherit', 'inherit'], detached: true }).unref();
+}
 
 let stdin = '';
 process.stdin.setEncoding('utf8');
@@ -14,6 +22,8 @@ if (env.FAKE_CLAUDE_STDIN_LOG) fs.appendFileSync(env.FAKE_CLAUDE_STDIN_LOG, stdi
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sid = env.FAKE_CLAUDE_SESSION_ID;
 const out = (s) => process.stdout.write(s + '\n');
+
+if (env.FAKE_CLAUDE_START_DELAY_MS) await sleep(Number(env.FAKE_CLAUDE_START_DELAY_MS));
 
 const ri = argv.indexOf('--resume');
 if (ri >= 0) {

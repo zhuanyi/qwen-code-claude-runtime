@@ -17,20 +17,24 @@ async function boot({ fake = {}, cfg = {}, home } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'qcr-it-'));
   const argvLog = path.join(tmp, 'argv.log');
   const stdinLog = path.join(tmp, 'stdin.log');
+  const pidFile = path.join(tmp, 'pid');
+  const sysLog = path.join(tmp, 'sys.log');
   const cwd = path.join(tmp, 'proj'); fs.mkdirSync(cwd);
   home ??= path.join(tmp, 'home'); fs.mkdirSync(home, { recursive: true });
-  const env = { ...process.env, FAKE_CLAUDE_ARGV_LOG: argvLog, FAKE_CLAUDE_STDIN_LOG: stdinLog, FAKE_CLAUDE_SESSION_ID: SID,
+  const env = { ...process.env, FAKE_CLAUDE_ARGV_LOG: argvLog, FAKE_CLAUDE_STDIN_LOG: stdinLog, FAKE_CLAUDE_PID_FILE: pidFile, FAKE_CLAUDE_SYSPROMPT_LOG: sysLog, FAKE_CLAUDE_SESSION_ID: SID,
     ...Object.fromEntries(Object.entries(fake).map(([k, v]) => [k.startsWith('FAKE_') ? k : 'FAKE_CLAUDE_' + k, v])) };
   if (fake.fixture) env.FAKE_CLAUDE_FIXTURE = fixture(fake.fixture);
   delete env.FAKE_CLAUDE_fixture;
   const s = await startServer({ bin: FAKE, cwd, home, env, sessions: new SessionStore(), ...cfg }, { port: 0, token: TOKEN, log: () => {} });
   const base = `http://127.0.0.1:${s.port}`;
-  const post = (body, headers = {}) => fetch(base + '/v1/chat/completions', {
-    method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+  const post = (body, headers = {}, signal) => fetch(base + '/v1/chat/completions', {
+    signal, method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
   return {
     base, cwd, home, post, port: s.port,
     argv: () => (fs.existsSync(argvLog) ? fs.readFileSync(argvLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []),
     stdin: () => (fs.existsSync(stdinLog) ? fs.readFileSync(stdinLog, 'utf8') : ''),
+    pid: () => (fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8')) : 0),
+    sysPrompt: () => (fs.existsSync(sysLog) ? fs.readFileSync(sysLog, 'utf8') : ''),
     close: async () => { await s.close(); fs.rmSync(tmp, { recursive: true, force: true }); },
   };
 }
@@ -261,5 +265,125 @@ test('keepalive chunks while claude is quiet', async () => {
     const empties = r.chunks.filter((c) => c.choices[0].delta.content === '' && !c.choices[0].delta.role);
     assert.ok(empties.length >= 2, `got ${empties.length}`);
     assert.match(r.text, /^Hello world\./);
+  } finally { await b.close(); }
+});
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+async function until(fn, ms = 5000) { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await sleep(25); } return false; }
+
+test('project MCP servers are ignored by default; opted-in ones are never auto-allowed', async () => {
+  for (const projectMcp of [false, true]) {
+    const b = await boot({ fake: { fixture: 'text-turn.jsonl' }, cfg: { projectMcp } });
+    try {
+      fs.mkdirSync(path.join(b.cwd, '.qwen'));
+      fs.writeFileSync(path.join(b.cwd, '.qwen', 'settings.json'), '{"mcpServers":{"evil":{"command":"x","trust":true}}}');
+      await sse(await b.post(body([user('hi')])));
+      const [a] = b.argv();
+      assert.equal(a.includes('--mcp-config'), projectMcp);
+      assert.ok(!a.includes('--allowedTools'));
+    } finally { await b.close(); }
+  }
+});
+
+test('concurrency cap returns qcr_busy 429 without quota wording', async () => {
+  const b = await boot({ fake: { fixture: 'text-turn.jsonl', DELAY_MS: '150' }, cfg: { maxConcurrent: 1 } });
+  try {
+    const first = b.post(body([user('one')]));
+    await sleep(100);
+    const res = await b.post(body([user('two')]));
+    assert.equal(res.status, 429);
+    assert.equal(res.headers.get('x-should-retry'), 'false');
+    const e = (await res.json()).error;
+    assert.equal(e.code, 'qcr_busy');
+    assert.equal(e.message, 'qcr is already running 1 Claude turns; try again when one finishes');
+    await sse(await first);
+    assert.equal((await b.post(body([user('three')]))).status, 200);
+  } finally { await b.close(); }
+});
+
+test('turn timeout: 504 before commit, warning line after', async () => {
+  const b = await boot({ fake: { fixture: 'text-turn.jsonl', START_DELAY_MS: '5000' }, cfg: { turnTimeoutMs: 150 } });
+  try {
+    const res = await b.post(body([user('hi')]));
+    assert.equal(res.status, 504);
+    assert.equal((await res.json()).error.code, 'claude_timeout');
+    assert.ok(await until(() => !alive(b.pid())));
+  } finally { await b.close(); }
+  const c = await boot({ fake: { fixture: 'text-turn.jsonl', DELAY_MS: '400' }, cfg: { turnTimeoutMs: 200 } });
+  try {
+    const r = await sse(await c.post(body([user('hi')])));
+    assert.match(r.text, /⚠ Claude turn exceeded the time limit/);
+  } finally { await c.close(); }
+});
+
+test('client abort kills the claude child', async () => {
+  const b = await boot({ fake: { fixture: 'text-turn.jsonl', DELAY_MS: '3000' }, cfg: { commitMs: 20 } });
+  try {
+    const ac = new AbortController();
+    const res = await b.post(body([user('hi')]), {}, ac.signal);
+    assert.equal(res.status, 200);
+    assert.ok(await until(() => b.pid() > 0));
+    assert.ok(alive(b.pid()));
+    ac.abort();
+    res.body.cancel().catch(() => {});
+    assert.ok(await until(() => !alive(b.pid())), 'child still running');
+  } finally { await b.close(); }
+});
+
+test('side query: system prompt file reaches claude; last user message is the unfenced prompt', async () => {
+  const b = await boot({ fake: { fixture: 'text-turn.jsonl' } });
+  try {
+    const msgs = [{ role: 'system', content: 'SYS-MARKER be terse' }, user('first'), { role: 'assistant', content: 'ok' }, user('LAST question')];
+    await (await b.post({ model: 'claude-code/haiku', messages: msgs })).json();
+    assert.match(b.sysPrompt(), /SYS-MARKER be terse/);
+    const line = JSON.parse(b.stdin().trim().split('\n').filter(Boolean)[0]).message.content;
+    assert.match(line, /<prior_conversation>[\s\S]*first[\s\S]*<\/prior_conversation>\n\nLAST question$/);
+    assert.ok(!/SYS-MARKER|LAST/.test(line.slice(0, line.indexOf('</prior_conversation>'))));
+    await (await b.post({ model: 'claude-code/haiku', messages: [user('solo')] })).json();
+    const solo = JSON.parse(b.stdin().trim().split('\n').filter(Boolean)[1]).message.content;
+    assert.equal(solo, 'solo');
+  } finally { await b.close(); }
+});
+
+test('side query rejects non-object or oversized function parameters', async () => {
+  const b = await boot({ fake: { fixture: 'side-query-json.jsonl' } });
+  try {
+    for (const parameters of [[1, 2], 'str', { type: 'object', description: 'x'.repeat(70000) }]) {
+      const res = await b.post({ model: 'claude-code/haiku', messages: [user('q')], tool_choice: 'required',
+        tools: [{ type: 'function', function: { name: 'f', parameters } }] });
+      assert.equal(res.status, 400);
+    }
+    assert.deepEqual(b.argv(), []);
+  } finally { await b.close(); }
+});
+
+test('oversized body gets a readable 413', async () => {
+  const b = await boot();
+  try {
+    const res = await b.post({ model: 'claude-code/sonnet', messages: [user('x'.repeat(9 * 1024 * 1024))] });
+    assert.equal(res.status, 413);
+    assert.equal((await res.json()).error.code, 'payload_too_large');
+  } finally { await b.close(); }
+});
+
+test('working directory check follows symlinks', async () => {
+  const b = await boot({ fake: { fixture: 'text-turn.jsonl' } });
+  const link = b.cwd + '-link';
+  try {
+    fs.symlinkSync(b.cwd, link);
+    const ok = await b.post(body([user(`I'm currently working in the directory: ${link}\nhi`)]));
+    assert.equal(ok.status, 200);
+    await ok.text();
+  } finally { fs.rmSync(link, { force: true }); await b.close(); }
+});
+
+test('a grandchild holding the pipe does not hang the turn', async () => {
+  const b = await boot({ fake: { STDERR: 'Not logged in', EXIT: '1', GRANDCHILD_MS: '4500' }, cfg: { commitMs: 5000 } });
+  try {
+    const t = Date.now();
+    const res = await b.post(body([user('hi')]));
+    assert.equal(res.status, 401);
+    assert.ok(Date.now() - t < 4000);
   } finally { await b.close(); }
 });

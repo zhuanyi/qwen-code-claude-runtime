@@ -19,6 +19,7 @@ export function createStreamParser() {
   /** @type {Set<string>} */ const deltaMsgs = new Set();
   /** @type {Set<string>} */ const fallbackSeen = new Set();
   let currentMsg = '';
+  let streamedCurrent = false;
 
   return {
     /** @param {string} line @returns {Event[]} */
@@ -35,10 +36,12 @@ export function createStreamParser() {
           const e = o.event ?? {};
           if (e.type === 'message_start') {
             currentMsg = e.message?.id ?? '';
+            streamedCurrent = false;
             usage(e.message?.usage);
           } else if (e.type === 'message_delta') {
-            usage(e.usage);
+            if (typeof e.usage?.input_tokens === 'number') usage(e.usage);
           } else if (e.type === 'content_block_delta' && e.delta?.type === 'text_delta' && e.delta.text) {
+            streamedCurrent = true;
             if (currentMsg) deltaMsgs.add(currentMsg);
             out.push({ type: 'text', text: e.delta.text });
           }
@@ -46,8 +49,9 @@ export function createStreamParser() {
         }
         case 'assistant': {
           const id = o.message?.id ?? '';
+          const skipText = o.message?.model === '<synthetic>' || streamedCurrent || deltaMsgs.has(id);
           for (const b of o.message?.content ?? []) {
-            if (b.type === 'text' && b.text && !deltaMsgs.has(id)) {
+            if (b.type === 'text' && b.text && !skipText) {
               const key = id + '\0' + b.text;
               if (!fallbackSeen.has(key)) { fallbackSeen.add(key); out.push({ type: 'text', text: b.text }); }
             } else if (b.type === 'tool_use' && b.name !== 'StructuredOutput' && !toolNames.has(b.id)) {
