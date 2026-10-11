@@ -31,14 +31,14 @@ function sendJson(res, status, body) {
 /** @param {import('node:http').ServerResponse} res @param {any} err */
 function sendError(res, err) {
   const known = err instanceof ClaudeError;
-  const status = known ? err.httpStatus : err instanceof ConfigError ? 400 : 502;
+  const status = known ? err.httpStatus : err instanceof ConfigError ? 400 : 424;
   const code = known ? err.code : err instanceof ConfigError ? 'invalid_request' : 'claude_failed';
-  sendJson(res, status, errorBody(code, redact(err?.message ?? 'internal error'), status >= 500 ? 'server_error' : 'invalid_request_error'));
+  sendJson(res, status, errorBody(code, redact(err?.message ?? 'internal error'), status >= 500 || status === 424 ? 'server_error' : 'invalid_request_error'));
   return code;
 }
 
 const realOrResolved = (/** @type {string} */ p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
-const timeoutError = () => new ClaudeError('claude_timeout', 'Claude turn exceeded the time limit (QCR_TURN_TIMEOUT_MS)', 504);
+const timeoutError = () => new ClaudeError('claude_timeout', 'Claude turn exceeded the time limit (QCR_TURN_TIMEOUT_MS)', 424);
 
 /** Drain events until the result; returns it plus bookkeeping. */
 async function collect(events) {
@@ -119,6 +119,7 @@ export function createHandler(cfg) {
       throw new ConfigError('function.parameters must be a JSON schema object of at most 64KB');
     }
 
+    /** @type {any} */ (res).qcrTurn = 'side';
     const result = await withTempDir(async (_dir, write) => {
       const systemPromptFile = await write('system.txt', system || 'You are a helpful assistant.');
       const args = buildClaudeArgs({ model, permissionMode, side: { systemPromptFile, jsonSchema: schema } });
@@ -132,7 +133,7 @@ export function createHandler(cfg) {
     if (forced) {
       let args;
       try { args = JSON.stringify(result.structuredOutput ?? JSON.parse(result.text)); }
-      catch { throw new ClaudeError('claude_failed', 'Claude did not return valid JSON for the requested schema', 502); }
+      catch { throw new ClaudeError('claude_failed', 'Claude did not return valid JSON for the requested schema', 424); }
       message = { role: 'assistant', content: null,
         tool_calls: [{ id: 'call_' + randomBytes(8).toString('hex'), type: 'function', function: { name: forced.name, arguments: args } }] };
       finish = 'tool_calls';
@@ -201,6 +202,7 @@ export function createHandler(cfg) {
         let resumeId = sid;
         for (;;) {
           const args = buildClaudeArgs({ model, permissionMode, resume: resumeId, mcpConfigPath, allowedTools });
+          /** @type {any} */ (res).qcrTurn = resumeId ? 'resumed' : prefix.length ? 'fresh+transcript' : 'fresh';
           try {
             return await runTurn(args, resumeId ? resumedPrompt : freshPrompt);
           } catch (err) {

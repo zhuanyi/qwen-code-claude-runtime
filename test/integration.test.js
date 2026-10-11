@@ -26,12 +26,13 @@ async function boot({ fake = {}, cfg = {}, home } = {}) {
     ...Object.fromEntries(Object.entries(fake).map(([k, v]) => [k.startsWith('FAKE_') ? k : 'FAKE_CLAUDE_' + k, v])) };
   if (fake.fixture) env.FAKE_CLAUDE_FIXTURE = fixture(fake.fixture);
   delete env.FAKE_CLAUDE_fixture;
-  const s = await startServer({ bin: FAKE, cwd, home, env, sessions: new SessionStore(), skills: false, ...cfg }, { port: 0, token: TOKEN, log: () => {} });
+  const logs = [];
+  const s = await startServer({ bin: FAKE, cwd, home, env, sessions: new SessionStore(), skills: false, ...cfg }, { port: 0, token: TOKEN, log: (l) => logs.push(l) });
   const base = `http://127.0.0.1:${s.port}`;
   const post = (body, headers = {}, signal) => fetch(base + '/v1/chat/completions', {
     signal, method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
   return {
-    base, cwd, home, post, port: s.port,
+    base, cwd, home, post, port: s.port, logs,
     argv: () => (fs.existsSync(argvLog) ? fs.readFileSync(argvLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []),
     stdin: () => (fs.existsSync(stdinLog) ? fs.readFileSync(stdinLog, 'utf8') : ''),
     pid: () => (fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8')) : 0),
@@ -106,6 +107,9 @@ test('second turn resumes with fork and sends only the new message', async () =>
     const stdins = b.stdin().split('\n').filter(Boolean);
     assert.match(stdins[1], /second question/);
     assert.ok(!/first question|prior_conversation|qwen only/.test(stdins[1]));
+    await new Promise((r) => setTimeout(r, 20)); // the log line is written on 'finish'
+    assert.match(b.logs[0], / turn=fresh /);
+    assert.match(b.logs[1], / turn=resumed /);
     noDanger(b);
   } finally { await b.close(); }
 });
@@ -158,11 +162,11 @@ test('exit without output and "Not logged in" stderr -> HTTP 401', async () => {
   } finally { await b.close(); }
 });
 
-test('missing claude binary -> 503', async () => {
+test('missing claude binary -> 424 (not retried by Qwen)', async () => {
   const b = await boot({ cfg: { bin: '/nonexistent/claude-bin' } });
   try {
     const res = await b.post(body([user('hi')]));
-    assert.equal(res.status, 503);
+    assert.equal(res.status, 424);
     assert.equal((await res.json()).error.code, 'claude_not_found');
   } finally { await b.close(); }
 });
@@ -304,11 +308,11 @@ test('concurrency cap returns qcr_busy 429 without quota wording', async () => {
   } finally { await b.close(); }
 });
 
-test('turn timeout: 504 before commit, warning line after', async () => {
+test('turn timeout: 424 before commit, warning line after', async () => {
   const b = await boot({ fake: { fixture: 'text-turn.jsonl', START_DELAY_MS: '5000' }, cfg: { turnTimeoutMs: 150 } });
   try {
     const res = await b.post(body([user('hi')]));
-    assert.equal(res.status, 504);
+    assert.equal(res.status, 424);
     assert.equal((await res.json()).error.code, 'claude_timeout');
     assert.ok(await until(() => !alive(b.pid())));
   } finally { await b.close(); }

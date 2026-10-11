@@ -23,7 +23,7 @@ export async function startServer(cfg, { port = 8787, host = '127.0.0.1', token,
       res.writeHead(status, { 'content-type': 'application/json', 'x-should-retry': 'false' });
       res.end(JSON.stringify(body));
     };
-    res.on('finish', () => log(`${req.method} ${req.url?.split('?')[0]} ${res.statusCode} ${Date.now() - start}ms model=${model} code=${code || '-'}`));
+    res.on('finish', () => log(`${req.method} ${req.url?.split('?')[0]} ${res.statusCode} ${Date.now() - start}ms model=${model} turn=${/** @type {any} */ (res).qcrTurn ?? '-'} code=${code || '-'}`));
     try {
       const actual = /** @type {import('node:net').AddressInfo} */ (server.address()).port;
       if (req.headers.host !== `127.0.0.1:${actual}` && req.headers.host !== `localhost:${actual}`) {

@@ -5,7 +5,7 @@ import { classifyError, redact } from '../src/runtime/errors.js';
 test('classification', () => {
   const c = (p) => classifyError(p);
   assert.equal(c({ spawnError: { code: 'ENOENT' } }).code, 'claude_not_found');
-  assert.equal(c({ spawnError: { code: 'ENOENT' } }).httpStatus, 503);
+  assert.equal(c({ spawnError: { code: 'ENOENT' } }).httpStatus, 424);
   assert.equal(c({ stderr: 'Not logged in' }).httpStatus, 401);
   assert.equal(c({ result: { text: 'Invalid API key', apiErrorStatus: null } }).code, 'claude_not_logged_in');
   const rl = c({ result: { text: "You've hit your usage limit", apiErrorStatus: 429 }, resetsAt: 1893456000 });
@@ -21,7 +21,7 @@ test('classification', () => {
   assert.equal(c({ result: { text: 'bad', apiErrorStatus: 400 } }).httpStatus, 400);
   assert.equal(c({ result: { text: 'issue with the selected model (nope)' } }).code, 'claude_bad_request');
   assert.equal(c({ stderr: 'boom', exitCode: 1 }).code, 'claude_failed');
-  assert.equal(c({ exitCode: 1 }).httpStatus, 502);
+  assert.equal(c({ exitCode: 1 }).httpStatus, 424);
 });
 
 test('false positives and no stderr leakage', () => {

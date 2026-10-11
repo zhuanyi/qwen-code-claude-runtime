@@ -134,10 +134,10 @@ so text is never lost or duplicated.
   (Claude Code has its own tool set and system prompt).
 * Errors: the SSE response is **not committed** until the first visible output. An error before that
   returns a proper HTTP error with an OpenAI-shaped body and ⟲ `x-should-retry: false` (Qwen retries
-  429/5xx up to 7×, then up to 10× more with minute-scale back-off): `claude` missing → 503, Claude not
+  429/5xx up to 7×, then up to 10× more with minute-scale back-off): `claude` missing → 424 (see §11), Claude not
   logged in → 401 with code `claude_not_logged_in` (distinct from the shim's own `invalid_shim_token`),
   rate limit → 429 worded `Claude quota exhausted; will reset at <time>` (matches Qwen's fail-fast quota
-  detector), bad request/model → 400, other → 502. Because headers are now committed on `init`, most
+  detector), bad request/model → 400, other → 424. Because headers are now committed on `init`, most
   `claude`-side errors arrive after commit: they are written as a visible `⚠` content line and the
   stream finishes normally.
 
@@ -280,3 +280,22 @@ Success criteria: (1) a unit test for discovery, precedence, frontmatter parsing
 protocol test that spawns `qcr mcp-skills` and exchanges `initialize` / `tools/list` / `tools/call`; (3) an
 integration test showing the handler passes the `qwen-skills` server and `--allowedTools mcp__qwen-skills__*`;
 (4) a one-off real `claude -p --mcp-config …` smoke test in which Claude loads a test skill.
+
+## 11. Real Qwen Code end-to-end findings (qwen-code 0.25.1 from npm, real `claude` 2.1.296)
+
+* Run with `qwen -m claude-code/haiku "<prompt>"` against `qcr serve`. Qwen used an isolated HOME; `claude` used its
+  own login. Qwen sent one streaming request per turn and no side queries with the recommended settings. It
+  printed the progress line, the answer and the cost footer.
+* `qwen -c` (continue) sends back the assistant text exactly as `qcr` emitted it, so the next turn **resumes** the
+  Claude session (`turn=resumed` in the `qcr` log, which now records `turn=fresh|fresh+transcript|resumed|side`).
+* ⟲ **Retry behaviour, measured:** for chat completions Qwen retries **every 5xx** (14 retries with 60–120 s
+  back-off were observed for a 503) and **ignores `x-should-retry`**, which it honours only on its Responses-API path.
+  A single request fails fast with 400, 401, 409, 424, and 429 when the body uses the quota wording. Persistent
+  `claude` failures (`claude_not_found`, `claude_failed`, `claude_timeout`) therefore return **424 Failed
+  Dependency** instead of 502/503/504. Verified through the real Qwen: not found → 424 and not logged in → 401,
+  each after one request.
+* `cwd_mismatch` (400) is shown and fails fast when Qwen runs in another directory.
+* Qwen's first user message carries its own `<available_skills>` reminder, which lists Qwen's bundled skills for
+  Qwen's Skill tool. On a fresh Claude session this text reaches Claude (as designed, for env context). It is
+  harmless in the runs above, but Claude could try to use these names with its own Skill tool. Follow-up:
+  consider stripping that particular reminder block.

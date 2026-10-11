@@ -33,9 +33,9 @@ const MODEL_RE = /unrecognized.model|unknown model|issue with the selected model
 export function classifyError({ result, stderr, spawnError, exitCode, resetsAt, rejected } = {}) {
   if (spawnError) {
     if (spawnError.code === 'ENOENT') {
-      return new ClaudeError('claude_not_found', 'Claude Code CLI (`claude`) not found on PATH. Install it and run `claude` once to log in, or set QCR_CLAUDE_BIN.', 503);
+      return new ClaudeError('claude_not_found', 'Claude Code CLI (`claude`) not found on PATH. Install it and run `claude` once to log in, or set QCR_CLAUDE_BIN.', 424);
     }
-    return new ClaudeError('claude_failed', 'Could not start claude', 502);
+    return new ClaudeError('claude_failed', 'Could not start claude', 424);
   }
   const status = result?.apiErrorStatus ?? null;
   const text = String(result?.text ?? '');
@@ -59,7 +59,7 @@ export function classifyError({ result, stderr, spawnError, exitCode, resetsAt, 
     return new ClaudeError('claude_bad_request', 'Claude rejected the request (bad request or unknown model)', 400);
   }
   const excerpt = redact(text.trim()).slice(0, 300);
-  return new ClaudeError('claude_failed', excerpt || `claude exited with code ${exitCode ?? 'unknown'}`, 502);
+  return new ClaudeError('claude_failed', excerpt || `claude exited with code ${exitCode ?? 'unknown'}`, 424);
 }
 
 export class ConfigError extends Error {
