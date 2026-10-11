@@ -13,11 +13,13 @@ const HELP = `qcr - run Qwen Code turns on your local Claude Code CLI
 
 Usage:
   qcr serve [--port N]   start the local OpenAI-compatible shim (default port 8787)
+  qcr mcp-skills [--cwd DIR]  run the Qwen skills MCP server on stdio (started by qcr itself)
   qcr token              print the shim bearer token (use it as the API key in Qwen Code)
   qcr --help
 
 Environment: QCR_PORT, QCR_CLAUDE_BIN, QCR_CWD, QCR_PERMISSION_MODE (manual|acceptEdits|plan),
 QCR_ALLOWED_TOOLS (comma list), QCR_KEEP_ANTHROPIC_ENV=1, QCR_MCP=off,
+QCR_SKILLS=off,
 QCR_TOOL_PROGRESS (content|off), QCR_FOOTER=off, QCR_TOKEN, QCR_PROJECT_MCP=1,
 QCR_MAX_CONCURRENCY (default 4), QCR_TURN_TIMEOUT_MS (default 1800000)`;
 
@@ -47,6 +49,11 @@ const env = process.env;
 
 if (cmd === 'token') {
   console.log(loadOrCreateToken({ env, home }));
+} else if (cmd === 'mcp-skills') {
+  const i = rest.indexOf('--cwd');
+  if (i >= 0 && !rest[i + 1]) die('--cwd needs a directory');
+  const { runSkillsMcpServer } = await import('../src/skills/mcp-server.js');
+  await runSkillsMcpServer({ cwd: path.resolve(i >= 0 ? rest[i + 1] : process.cwd()), home });
 } else if (cmd === 'serve') {
   const i = rest.indexOf('--port');
   const port = Number(i >= 0 ? rest[i + 1] : env.QCR_PORT || 8787);
@@ -67,6 +74,7 @@ if (cmd === 'token') {
     allowedTools,
     keepAnthropicEnv: env.QCR_KEEP_ANTHROPIC_ENV === '1',
     mcp: env.QCR_MCP !== 'off',
+    skills: env.QCR_SKILLS !== 'off',
     projectMcp: env.QCR_PROJECT_MCP === '1',
     maxConcurrent: posInt(env.QCR_MAX_CONCURRENCY, 4, 'QCR_MAX_CONCURRENCY'),
     turnTimeoutMs: posInt(env.QCR_TURN_TIMEOUT_MS, 1800000, 'QCR_TURN_TIMEOUT_MS'),

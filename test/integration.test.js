@@ -19,13 +19,14 @@ async function boot({ fake = {}, cfg = {}, home } = {}) {
   const stdinLog = path.join(tmp, 'stdin.log');
   const pidFile = path.join(tmp, 'pid');
   const sysLog = path.join(tmp, 'sys.log');
+  const mcpLog = path.join(tmp, 'mcp.log');
   const cwd = path.join(tmp, 'proj'); fs.mkdirSync(cwd);
   home ??= path.join(tmp, 'home'); fs.mkdirSync(home, { recursive: true });
-  const env = { ...process.env, FAKE_CLAUDE_ARGV_LOG: argvLog, FAKE_CLAUDE_STDIN_LOG: stdinLog, FAKE_CLAUDE_PID_FILE: pidFile, FAKE_CLAUDE_SYSPROMPT_LOG: sysLog, FAKE_CLAUDE_SESSION_ID: SID,
+  const env = { ...process.env, FAKE_CLAUDE_ARGV_LOG: argvLog, FAKE_CLAUDE_STDIN_LOG: stdinLog, FAKE_CLAUDE_PID_FILE: pidFile, FAKE_CLAUDE_SYSPROMPT_LOG: sysLog, FAKE_CLAUDE_MCP_LOG: mcpLog, FAKE_CLAUDE_SESSION_ID: SID,
     ...Object.fromEntries(Object.entries(fake).map(([k, v]) => [k.startsWith('FAKE_') ? k : 'FAKE_CLAUDE_' + k, v])) };
   if (fake.fixture) env.FAKE_CLAUDE_FIXTURE = fixture(fake.fixture);
   delete env.FAKE_CLAUDE_fixture;
-  const s = await startServer({ bin: FAKE, cwd, home, env, sessions: new SessionStore(), ...cfg }, { port: 0, token: TOKEN, log: () => {} });
+  const s = await startServer({ bin: FAKE, cwd, home, env, sessions: new SessionStore(), skills: false, ...cfg }, { port: 0, token: TOKEN, log: () => {} });
   const base = `http://127.0.0.1:${s.port}`;
   const post = (body, headers = {}, signal) => fetch(base + '/v1/chat/completions', {
     signal, method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
@@ -34,6 +35,7 @@ async function boot({ fake = {}, cfg = {}, home } = {}) {
     argv: () => (fs.existsSync(argvLog) ? fs.readFileSync(argvLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []),
     stdin: () => (fs.existsSync(stdinLog) ? fs.readFileSync(stdinLog, 'utf8') : ''),
     pid: () => (fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8')) : 0),
+    mcpConfigs: () => (fs.existsSync(mcpLog) ? fs.readFileSync(mcpLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []),
     sysPrompt: () => (fs.existsSync(sysLog) ? fs.readFileSync(sysLog, 'utf8') : ''),
     close: async () => { await s.close(); fs.rmSync(tmp, { recursive: true, force: true }); },
   };
@@ -386,4 +388,46 @@ test('a grandchild holding the pipe does not hang the turn', async () => {
     assert.equal(res.status, 401);
     assert.ok(Date.now() - t < 4000);
   } finally { await b.close(); }
+});
+
+test('qwen-skills MCP server is added by default, even with no user MCP servers', async () => {
+  const b = await boot({ fake: { fixture: 'text-turn.jsonl' }, cfg: { skills: true } });
+  try {
+    await sse(await b.post(body([user('hi')])));
+    const [a] = b.argv();
+    assert.ok(a.includes('--mcp-config'));
+    assert.equal(a[a.indexOf('--allowedTools') + 1], 'mcp__qwen-skills__*');
+    const srv = b.mcpConfigs()[0].mcpServers['qwen-skills'];
+    assert.equal(srv.type, 'stdio');
+    assert.equal(srv.command, process.execPath);
+    assert.ok(path.isAbsolute(srv.args[0]));
+    assert.deepEqual(srv.args.slice(1), ['mcp-skills', '--cwd', b.cwd]);
+  } finally { await b.close(); }
+});
+
+test('skills=false omits qwen-skills; mcp=false alone keeps it', async () => {
+  for (const cfg of [{ skills: false }, { skills: true, mcp: false }]) {
+    const b = await boot({ fake: { fixture: 'text-turn.jsonl' }, cfg });
+    try {
+      await sse(await b.post(body([user('hi')])));
+      assert.equal(b.argv()[0].includes('--mcp-config'), cfg.skills);
+      assert.equal(b.mcpConfigs().length, cfg.skills ? 1 : 0);
+    } finally { await b.close(); }
+  }
+});
+
+test('a user MCP server named qwen-skills is replaced', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'qcr-home-'));
+  fs.mkdirSync(path.join(home, '.qwen'));
+  fs.writeFileSync(path.join(home, '.qwen', 'settings.json'),
+    '{"mcpServers":{"qwen-skills":{"command":"evil","trust":true},"files":{"command":"npx"}}}');
+  const b = await boot({ home, fake: { fixture: 'text-turn.jsonl' }, cfg: { skills: true } });
+  try {
+    await sse(await b.post(body([user('hi')])));
+    const servers = b.mcpConfigs()[0].mcpServers;
+    assert.equal(servers['qwen-skills'].command, process.execPath);
+    assert.ok(servers.files);
+    const a = b.argv()[0];
+    assert.equal(a[a.indexOf('--allowedTools') + 1], 'mcp__qwen-skills__*');
+  } finally { await b.close(); fs.rmSync(home, { recursive: true, force: true }); }
 });

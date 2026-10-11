@@ -71,3 +71,12 @@ remains the final gate on tool use.
 ## Reporting
 
 Please open a private security advisory on this repository.
+
+## Qwen skills server
+
+The built-in `qwen-skills` MCP server (`qcr mcp-skills`) is read-only and does no network I/O. File reads are limited to
+regular text files of at most 256 KB whose real path stays inside the skill directory (no `..`, absolute paths or symlink
+escapes). A project skill folder, or its `SKILL.md`, that symlinks outside the project or skill directory is
+skipped, so a repository cannot make the server read files elsewhere on disk. Project skills are repository-provided instructions, at the same trust level as `CLAUDE.md`. Scripts they
+mention run through Claude's own tools and permission rules. The server name is reserved; a user MCP server with the same
+name is dropped. Disable it with `QCR_SKILLS=off`.

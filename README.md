@@ -33,6 +33,8 @@ Qwen Code already supports. Qwen Code needs no patch. For each turn, `qcr` does 
 * Keeps the conversation going across turns: later turns use `claude --resume <id> --fork-session`. When Claude
   joins a conversation that already has history (for example after you switch from a Qwen model), the earlier
   history is passed to it as quoted context.
+* Exposes your Qwen skills (`.qwen/skills`, `.agents/skills`, project then user) to Claude through a small built-in,
+  read-only stdio MCP server, `qwen-skills` (tools `qwen_skill` and `qwen_skill_file`). Disable with `QCR_SKILLS=off`.
 * Passes your Qwen `mcpServers` from `~/.qwen/settings.json` to `claude --mcp-config`. Servers you marked
   `"trust": true` there are pre-allowed for Claude. Project-level `<project>/.qwen/settings.json` servers are
   used only when you set `QCR_PROJECT_MCP=1`: a cloned repository could otherwise make `claude` start arbitrary
@@ -97,6 +99,7 @@ caps a single stream at 15 minutes by default.
 | `QCR_PERMISSION_MODE` | `manual` | `manual`, `acceptEdits` or `plan`. `bypassPermissions` is **refused** |
 | `QCR_ALLOWED_TOOLS` | – | Extra `--allowedTools` rules, comma-separated, e.g. `Edit,Bash(npm test)` |
 | `QCR_MCP` | on | `off` stops passing Qwen MCP servers to Claude |
+| `QCR_SKILLS` | on | `off` stops exposing Qwen skills to Claude (the `qwen-skills` MCP server) |
 | `QCR_PROJECT_MCP` | off | `1` also passes `<project>/.qwen/settings.json` MCP servers (never auto-trusted) |
 | `QCR_MAX_CONCURRENCY` | `4` | Maximum simultaneous `claude` turns. Further requests get `429 qcr_busy` |
 | `QCR_TURN_TIMEOUT_MS` | `1800000` | Wall-clock limit per turn |
@@ -110,7 +113,8 @@ denied (`--permission-prompts none`). Denials are reported in the reply with a h
 
 ## Known gaps (MVP)
 
-* Qwen-side skills and tools are not yet exposed to Claude. Planned: a small MCP server, as OpenClaw does.
+* Qwen skills are exposed to Claude through a local MCP server (see above). Qwen *tools* are not yet exposed, and
+  extension, bundled and custom skill directories are not yet discovered.
 * Context files (`QWEN.md`) reach Claude only through Qwen's own startup context on the first Claude turn.
 * `includeTools` / `excludeTools` in MCP configs are ignored (a warning is logged).
 * Continuity depends on Qwen sending back the assistant text it received. If Qwen compresses the history, the

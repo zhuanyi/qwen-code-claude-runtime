@@ -69,3 +69,14 @@ targeted fix and test, and the full suite was re-run (see the PR description for
   streamed chat-completion requests sent with curl, **not** through Qwen Code. It showed streamed text, a
   `⚙ Read` progress line, the cost footer, and per-request (not cumulative) `prompt_tokens`. Turn 2 answered
   from turn 1's context. The full Qwen Code UI flow is still the manual checklist in `docs/E2E.md`.
+
+## 5. M6 — Qwen skills MCP server
+
+* Self-review (security) finding: a cloned repository could symlink `.qwen/skills/<x>` (or its `SKILL.md`) to a
+  directory outside the project. `qwen_skill_file` would then read files from there. **Fixed:** project skill
+  directories, and every `SKILL.md`, must resolve inside their root or skill directory. User-scope symlinks
+  stay allowed. A test was added.
+* Verification: `npm test` **68/68** pass. In a real smoke test, `claude` 2.1.296 (haiku) was given
+  `--mcp-config` pointing at `qcr mcp-skills`. The server reported `connected`, Claude called
+  `mcp__qwen-skills__qwen_skill {name:"greeter"}` and answered with the skill's exact text, with no
+  permission denials.
