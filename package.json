@@ -1,0 +1,11 @@
+{
+  "name": "qwen-code-claude-runtime",
+  "version": "0.1.0",
+  "description": "Run Qwen Code turns on your locally installed, logged-in Claude Code CLI via a local OpenAI-compatible shim.",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "qcr": "bin/qcr.js" },
+  "engines": { "node": ">=20" },
+  "files": ["bin", "src"],
+  "scripts": { "test": "node --test test/*.test.js" }
+}
