@@ -1,6 +1,7 @@
 // @ts-check
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { buildClaudeArgs, modelAliasFromId } from '../runtime/argv.js';
 import { buildChildEnv } from '../runtime/env.js';
@@ -15,9 +16,10 @@ import { chunk, deniedLine, errorBody, errorLine, footerLine, toolFailedLine, to
  * @typedef {{bin: string, cwd: string, home: string, permissionMode?: string, allowedTools?: string[],
  *   keepAnthropicEnv?: boolean, mcp?: boolean, toolProgress?: string, footer?: boolean,
  *   sessions: import('./sessions.js').SessionStore, keepaliveMs?: number, commitMs?: number,
- *   env?: NodeJS.ProcessEnv, projectMcp?: boolean, maxConcurrent?: number, turnTimeoutMs?: number}} HandlerConfig
+ *   env?: NodeJS.ProcessEnv, projectMcp?: boolean, skills?: boolean, maxConcurrent?: number, turnTimeoutMs?: number}} HandlerConfig
  */
 
+const QCR_BIN = fileURLToPath(new URL('../../bin/qcr.js', import.meta.url));
 const NO_RETRY = { 'x-should-retry': 'false' };
 
 /** @param {import('node:http').ServerResponse} res @param {number} status @param {any} body */
@@ -179,15 +181,23 @@ export function createHandler(cfg) {
       const result = await withTempDir(async (_dir, write) => {
         const allowedTools = [...(cfg.allowedTools ?? [])];
         let mcpConfigPath;
+        /** @type {Record<string, any>} */ let mcpServers = {};
         if (cfg.mcp !== false) {
           const loaded = loadQwenMcpServers({ cwd: cfg.cwd, home: cfg.home, projectMcp: cfg.projectMcp === true });
           const conv = toClaudeMcpConfig(loaded.servers);
           for (const w of [...loaded.warnings, ...conv.warnings]) console.error(`[qcr] ${w}`);
-          if (Object.keys(conv.config.mcpServers).length) {
-            mcpConfigPath = await write('mcp.json', JSON.stringify(conv.config));
-            for (const n of conv.trustedNames) allowedTools.push(`mcp__${n}__*`);
-          }
+          mcpServers = conv.config.mcpServers;
+          for (const n of conv.trustedNames) allowedTools.push(`mcp__${n}__*`);
         }
+        if (cfg.skills !== false) {
+          if ('qwen-skills' in mcpServers) {
+            console.error('[qcr] MCP server name "qwen-skills" is reserved; ignoring yours');
+            allowedTools.splice(0, allowedTools.length, ...allowedTools.filter((t) => t !== 'mcp__qwen-skills__*'));
+          }
+          mcpServers['qwen-skills'] = { type: 'stdio', command: process.execPath, args: [QCR_BIN, 'mcp-skills', '--cwd', cfg.cwd] };
+          allowedTools.push('mcp__qwen-skills__*');
+        }
+        if (Object.keys(mcpServers).length) mcpConfigPath = await write('mcp.json', JSON.stringify({ mcpServers }));
         let resumeId = sid;
         for (;;) {
           const args = buildClaudeArgs({ model, permissionMode, resume: resumeId, mcpConfigPath, allowedTools });

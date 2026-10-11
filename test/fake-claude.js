@@ -7,6 +7,8 @@ const argv = process.argv.slice(2);
 const env = process.env;
 if (env.FAKE_CLAUDE_ARGV_LOG) fs.appendFileSync(env.FAKE_CLAUDE_ARGV_LOG, JSON.stringify(argv) + '\n');
 if (env.FAKE_CLAUDE_PID_FILE) fs.writeFileSync(env.FAKE_CLAUDE_PID_FILE, String(process.pid));
+const mi = argv.indexOf('--mcp-config');
+if (env.FAKE_CLAUDE_MCP_LOG && mi >= 0) fs.appendFileSync(env.FAKE_CLAUDE_MCP_LOG, fs.readFileSync(argv[mi + 1], 'utf8') + '\n');
 const si = argv.indexOf('--system-prompt-file');
 if (env.FAKE_CLAUDE_SYSPROMPT_LOG && si >= 0) fs.appendFileSync(env.FAKE_CLAUDE_SYSPROMPT_LOG, fs.readFileSync(argv[si + 1], 'utf8') + '\n');
 // A grandchild that keeps our stdout open after we exit.

@@ -242,3 +242,41 @@ in one session; Windows-specific path handling beyond what Node provides.
 Approve-with-changes; 2 blockers (timeouts, streamed side requests polluting sessions) and 4 majors
 (cumulative usage, 429 retry storms, wrong cwd, forwarded Qwen reminders) were folded in above (⟲).
 Full list and dispositions: `docs/REVIEW.md` §1.
+
+## 10. M6 — Qwen skills for Claude via a local MCP server
+
+Goal: skills the user installed for Qwen Code become usable by Claude when a turn runs on `claude-code/*`.
+
+Findings (qwen-code @ `7cbb993`, `core/src/skills/`): a skill is a directory containing `SKILL.md`, which has YAML
+frontmatter (`name`, `description`, optional `disable-model-invocation`, `allowed-tools`, …) and a Markdown
+body. This is the same shape as a Claude skill. Discovery order (first wins): project `.qwen/skills`, project
+`.agents/skills`, user `~/.qwen/skills`, user `~/.agents/skills`, then extension skills, then bundled skills.
+
+Design (smallest thing that works, following OpenClaw's approach of exposing host capabilities to Claude via MCP):
+* `qcr mcp-skills --cwd <dir>` is a zero-dependency **stdio MCP server** that speaks newline-delimited
+  JSON-RPC 2.0 (`initialize`, `notifications/initialized`, `ping`, `tools/list`, `tools/call`).
+  It is **read-only** and does no network I/O.
+* It exposes two tools:
+  * `qwen_skill {name}` returns the skill body (frontmatter stripped), its absolute base directory, and a list
+    of its supporting files. The tool *description* carries the index of available skills
+    (`name: description`, capped at ~8 KB), so Claude knows when to call it. This mirrors Qwen's
+    `<available_skills>` listing.
+  * `qwen_skill_file {name, path}` reads a supporting file inside the skill directory. The resolved real path
+    must stay inside the skill's real directory (no `..` and no symlink escape), files are capped at
+    256 KB, and only text is returned.
+* Skills with `disable-model-invocation: true` are not listed. Extension, bundled and custom skill dirs are
+  out of scope for M6. Skill names are validated `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.
+* Wiring: unless `QCR_SKILLS=off`, the handler adds a reserved MCP server `qwen-skills` (stdio:
+  `process.execPath <abs bin/qcr.js> mcp-skills --cwd <cwd>`) to the generated `--mcp-config` and pre-allows
+  `mcp__qwen-skills__*`. These tools are read-only and come from this project. A user MCP server named
+  `qwen-skills` is skipped with a warning.
+* Scripts referenced by a skill are run by Claude's own Bash tool, using the returned base directory, so they
+  are still subject to Claude's permission rules.
+
+Trust: project skills are repository-provided instructions, at the same trust level as the `CLAUDE.md` and
+`.claude/skills` that `claude` already loads from the project. They are included by default and documented in SECURITY.md.
+
+Success criteria: (1) a unit test for discovery, precedence, frontmatter parsing and containment; (2) an MCP
+protocol test that spawns `qcr mcp-skills` and exchanges `initialize` / `tools/list` / `tools/call`; (3) an
+integration test showing the handler passes the `qwen-skills` server and `--allowedTools mcp__qwen-skills__*`;
+(4) a one-off real `claude -p --mcp-config …` smoke test in which Claude loads a test skill.
