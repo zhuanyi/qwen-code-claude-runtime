@@ -15,6 +15,10 @@ test('qcr mcp-skills speaks MCP over stdio', async () => {
   fs.mkdirSync(path.join(dir, 'ref'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: demo\ndescription: Demo skill\n---\nDo the demo.\n');
   fs.writeFileSync(path.join(dir, 'ref', 'a.md'), 'reference text');
+  const ext = path.join(home, '.qwen', 'extensions', 'demo');
+  fs.mkdirSync(path.join(ext, 'skills', 'pdf-tools'), { recursive: true });
+  fs.writeFileSync(path.join(ext, 'qwen-extension.json'), '{"name":"demo-ext"}');
+  fs.writeFileSync(path.join(ext, 'skills', 'pdf-tools', 'SKILL.md'), '---\nname: pdf-tools\ndescription: Ext pdf\n---\nExt body.\n');
   const child = spawn(process.execPath, [QCR, 'mcp-skills', '--cwd', cwd], { env: { ...process.env, HOME: home, USERPROFILE: home }, stdio: ['pipe', 'pipe', 'inherit'] });
   let out = '';
   child.stdout.setEncoding('utf8');
@@ -31,6 +35,7 @@ test('qcr mcp-skills speaks MCP over stdio', async () => {
     call(5, 'qwen_skill_file', { name: 'demo', path: 'ref/a.md' });
     call(6, 'qwen_skill', { name: 'nope' });
     call(7, 'qwen_skill_file', { name: 'demo', path: '../../x' });
+    call(10, 'qwen_skill', { name: 'demo-ext:pdf-tools' });
     send({ id: 8, method: 'bogus/method' });
     send({ id: 9, method: 'tools/call', params: { name: 'qwen_skill', arguments: {} } });
     send('{not json');
@@ -38,7 +43,7 @@ test('qcr mcp-skills speaks MCP over stdio', async () => {
     await closed;
     const msgs = out.trim().split('\n').map((l) => JSON.parse(l)); // every stdout line is JSON
     const byId = new Map(msgs.map((m) => [m.id, m]));
-    assert.equal(msgs.length, 10); // the notification gets no reply
+    assert.equal(msgs.length, 11); // the notification gets no reply
     assert.equal(byId.get(1).result.protocolVersion, '2025-03-26');
     assert.equal(byId.get(1).result.serverInfo.name, 'qwen-skills');
     assert.deepEqual(byId.get(2).result, {});
@@ -48,6 +53,8 @@ test('qcr mcp-skills speaks MCP over stdio', async () => {
     const t4 = byId.get(4).result.content[0].text;
     assert.match(t4, /^# Skill: demo\nBase directory: .*demo\n\nDo the demo\./);
     assert.match(t4, /Supporting files:\n- ref\/a\.md$/);
+    assert.match(tools[0].description, /- demo-ext:pdf-tools: Ext pdf/);
+    assert.match(byId.get(10).result.content[0].text, /^# Skill: demo-ext:pdf-tools\nExtension: demo-ext\nBase directory: .*pdf-tools\n\nExt body\./);
     assert.equal(byId.get(5).result.content[0].text, 'reference text');
     assert.equal(byId.get(6).result.isError, true);
     assert.equal(byId.get(7).result.isError, true);

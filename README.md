@@ -33,7 +33,7 @@ Qwen Code already supports. Qwen Code needs no patch. For each turn, `qcr` does 
 * Keeps the conversation going across turns: later turns use `claude --resume <id> --fork-session`. When Claude
   joins a conversation that already has history (for example after you switch from a Qwen model), the earlier
   history is passed to it as quoted context.
-* Exposes your Qwen skills (`.qwen/skills`, `.agents/skills`, project then user) to Claude through a small built-in,
+* Exposes your Qwen skills (`.qwen/skills`, `.agents/skills`, project then user; `skills.directories` from your user settings; installed, enabled extensions as `ext:skill`; `skills.disabledLevels` / `skills.disabled` honoured) to Claude through a small built-in,
   read-only stdio MCP server, `qwen-skills` (tools `qwen_skill` and `qwen_skill_file`). Disable with `QCR_SKILLS=off`.
 * Passes your Qwen `mcpServers` from `~/.qwen/settings.json` to `claude --mcp-config`. Servers you marked
   `"trust": true` there are pre-allowed for Claude. Project-level `<project>/.qwen/settings.json` servers are
@@ -114,7 +114,7 @@ denied (`--permission-prompts none`). Denials are reported in the reply with a h
 ## Known gaps (MVP)
 
 * Qwen skills are exposed to Claude through a local MCP server (see above). Qwen *tools* are not yet exposed, and
-  extension, bundled and custom skill directories are not yet discovered.
+  Qwen's bundled skills are not served (they are Qwen-internal).
 * Context files (`QWEN.md`) reach Claude only through Qwen's own startup context on the first Claude turn.
 * `includeTools` / `excludeTools` in MCP configs are ignored (a warning is logged).
 * Continuity depends on Qwen sending back the assistant text it received. If Qwen compresses the history, the

@@ -80,3 +80,14 @@ targeted fix and test, and the full suite was re-run (see the PR description for
   `--mcp-config` pointing at `qcr mcp-skills`. The server reported `connected`, Claude called
   `mcp__qwen-skills__qwen_skill {name:"greeter"}` and answered with the skill's exact text, with no
   permission denials.
+
+## 6. Real Qwen Code E2E and M6.1 skill sources
+
+* Real Qwen Code 0.25.1 run against `qcr` and real `claude` (findings in `docs/PLAN.md` §11). Qwen retries every 5xx on
+  chat completions and ignores `x-should-retry` there. **Fixed:** persistent `claude` failures now return 424, so Qwen
+  fails fast after one request (verified for "not found" (424) and "not logged in" (401)).
+* M6.1 (extension skills, custom skill dirs, `skills.disabled` / `skills.disabledLevels`) was cross-checked against
+  the real `qwen extensions install|disable|list`. In both states the shim's discovery agreed with Qwen: with the
+  extension enabled for the workspace it exposed `demo-ext:pdf-tools`, and after `disable --scope workspace` it
+  exposed nothing.
+* `npm test`: **73/73** pass.

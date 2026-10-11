@@ -265,7 +265,7 @@ Design (smallest thing that works, following OpenClaw's approach of exposing hos
     must stay inside the skill's real directory (no `..` and no symlink escape), files are capped at
     256 KB, and only text is returned.
 * Skills with `disable-model-invocation: true` are not listed. Extension, bundled and custom skill dirs are
-  out of scope for M6. Skill names are validated `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.
+  out of scope for M6 (extension and custom dirs: see M6.1). Skill names are validated `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.
 * Wiring: unless `QCR_SKILLS=off`, the handler adds a reserved MCP server `qwen-skills` (stdio:
   `process.execPath <abs bin/qcr.js> mcp-skills --cwd <cwd>`) to the generated `--mcp-config` and pre-allows
   `mcp__qwen-skills__*`. These tools are read-only and come from this project. A user MCP server named
@@ -280,6 +280,17 @@ Success criteria: (1) a unit test for discovery, precedence, frontmatter parsing
 protocol test that spawns `qcr mcp-skills` and exchanges `initialize` / `tools/list` / `tools/call`; (3) an
 integration test showing the handler passes the `qwen-skills` server and `--allowedTools mcp__qwen-skills__*`;
 (4) a one-off real `claude -p --mcp-config …` smoke test in which Claude loads a test skill.
+
+**M6.1 addendum (verified against qwen-code 0.25.1).** Sources, first wins: project `.qwen/skills`, `.agents/skills`;
+user `~/.qwen/skills`, `~/.agents/skills`; custom dirs from the **user** settings `skills.directories` (`~` expands to
+home, relative paths resolve against home; the key is ignored with a warning in the project file); extension skills
+`~/.qwen/extensions/<dir>/skills/<skill>/SKILL.md` registered as `<extName>:<skill>` (`extName` from
+`qwen-extension.json` or legacy `gemini-extension.json`; `extension-enablement.json` and `extension-store` are not
+extensions). `skills.disabledLevels` (project|user|extension|bundled) and `skills.disabled` (case-insensitive; an
+extension skill matches `ext:skill` or `skill`) are unions of user and project settings. Enablement: an extension is
+enabled unless `extension-enablement.json[<ext>].overrides` says otherwise; rules are evaluated in order, the last
+match wins, `!` disables, a trailing `*` includes subdirectories, and both `cwd` and its realpath are checked. Extension
+skill dirs and `SKILL.md` must stay inside the extension's real dir. Bundled skills are still not served.
 
 ## 11. Real Qwen Code end-to-end findings (qwen-code 0.25.1 from npm, real `claude` 2.1.296)
 

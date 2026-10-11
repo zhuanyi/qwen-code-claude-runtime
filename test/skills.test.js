@@ -123,3 +123,125 @@ test('project skills may not symlink outside the project; user skills may', () =
     assert.ok(warnings.some((w) => w.includes('leaves the skill directory')));
   } finally { t.done(); }
 });
+
+// --- settings, custom directories, extensions ---
+const writeJson = (file, o) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, typeof o === 'string' ? o : JSON.stringify(o)); };
+const settings = (base, skills) => writeJson(path.join(base, '.qwen', 'settings.json'), `// comment\n{"skills": ${JSON.stringify(skills)},}`);
+function addExt(t, dir, name, skillNames = ['pdf-tools'], manifest = 'qwen-extension.json') {
+  const root = path.join(t.home, '.qwen', 'extensions', dir);
+  writeJson(path.join(root, manifest), { name });
+  for (const s of skillNames) t.add('', s, fm(s, `ext ${s}`), root);
+  return root;
+}
+const names = (t) => [...discoverSkills({ cwd: t.cwd, home: t.home }).skills.keys()].sort();
+const enablement = (t, o) => writeJson(path.join(t.home, '.qwen', 'extensions', 'extension-enablement.json'), o);
+
+test('custom user directories: tilde, relative to home, user settings only', () => {
+  const t = setup();
+  try {
+    t.add('.qwen', 'builtin', fm('dup', 'default user'), t.home);
+    fs.mkdirSync(path.join(t.home, 'mine'));
+    const d1 = path.join(t.home, 'mine', 'skills-a'), d2 = path.join(t.home, 'rel');
+    for (const [d, n, desc] of [[d1, 'a', 'custom a'], [d2, 'b', 'custom b'], [d2, 'dup', 'custom dup']]) {
+      fs.mkdirSync(path.join(d, n), { recursive: true });
+      fs.writeFileSync(path.join(d, n, 'SKILL.md'), fm(n, desc));
+    }
+    const evil = path.join(t.tmp, 'evil');
+    fs.mkdirSync(path.join(evil, 'x'), { recursive: true });
+    fs.writeFileSync(path.join(evil, 'x', 'SKILL.md'), fm('x', 'evil'));
+    settings(t.home, { directories: ['~/mine/skills-a', 'rel'] });
+    settings(t.cwd, { directories: [evil] });
+    const { skills, warnings } = discoverSkills({ cwd: t.cwd, home: t.home });
+    assert.deepEqual([...skills.keys()].sort(), ['a', 'b', 'dup']);
+    assert.equal(skills.get('dup').description, 'default user'); // custom dirs come after default user roots
+    assert.equal(skills.get('a').scope, 'user');
+    assert.ok(warnings.some((w) => w.includes('ignoring skills.directories')));
+  } finally { t.done(); }
+});
+
+test('disabledLevels and disabled names', () => {
+  const t = setup();
+  try {
+    t.add('.qwen', 'p', fm('proj', 'p'));
+    t.add('.qwen', 'u', fm('usr', 'u'), t.home);
+    addExt(t, 'e1', 'ext');
+    assert.deepEqual(names(t), ['ext:pdf-tools', 'proj', 'usr']);
+    settings(t.home, { disabledLevels: ['user'] });
+    assert.deepEqual(names(t), ['ext:pdf-tools', 'proj']);
+    settings(t.cwd, { disabledLevels: ['project', 'extension'] });
+    assert.deepEqual(names(t), []);
+    settings(t.home, { disabled: ['PROJ'] });
+    settings(t.cwd, { disabled: ['Ext:PDF-tools'] });
+    assert.deepEqual(names(t), ['usr']);
+    settings(t.home, { disabled: [] });
+    settings(t.cwd, { disabled: ['pdf-tools'] }); // authored name matches an extension skill too
+    assert.deepEqual(names(t), ['proj', 'usr']);
+  } finally { t.done(); }
+});
+
+test('extensions: qualified names, manifests, ignored entries, coexist with plain skills', () => {
+  const t = setup();
+  try {
+    t.add('.qwen', 'pdf', fm('pdf', 'project pdf'));
+    addExt(t, 'demo', 'demo-ext');
+    addExt(t, 'legacy', 'old-ext', ['x'], 'gemini-extension.json');
+    addExt(t, 'extension-store', 'store-ext', ['s']);
+    fs.mkdirSync(path.join(t.home, '.qwen', 'extensions', 'nomanifest', 'skills', 'n'), { recursive: true });
+    fs.writeFileSync(path.join(t.home, '.qwen', 'extensions', 'nomanifest', 'skills', 'n', 'SKILL.md'), fm('n', 'd'));
+    const { skills } = discoverSkills({ cwd: t.cwd, home: t.home });
+    assert.deepEqual([...skills.keys()].sort(), ['demo-ext:pdf-tools', 'old-ext:x', 'pdf']);
+    assert.equal(skills.get('demo-ext:pdf-tools').scope, 'extension');
+    assert.equal(skills.get('demo-ext:pdf-tools').ext, 'demo-ext');
+  } finally { t.done(); }
+});
+
+test('extension enablement: default, user scope, workspace scope, re-enable, realpath', () => {
+  const t = setup();
+  try {
+    addExt(t, 'demo', 'demo-ext');
+    const ws = path.join(t.home, 'ws'), outside = t.cwd; // ws is under home, outside is not
+    fs.mkdirSync(ws);
+    const on = (cwd) => [...discoverSkills({ cwd, home: t.home }).skills.keys()].length === 1;
+    assert.ok(on(ws));
+    enablement(t, { 'demo-ext': { overrides: [`!${t.home}/*`] } });
+    assert.ok(!on(ws) && on(outside));
+    enablement(t, { 'demo-ext': { overrides: [`!${t.home}/*`, `${ws}/`] } });
+    assert.ok(on(ws));
+    enablement(t, { 'demo-ext': { overrides: [`${ws}/`, `!${t.home}/*`] } }); // last matching rule wins
+    assert.ok(!on(ws));
+    enablement(t, { 'demo-ext': { overrides: [`!${outside}`] } }); // workspace scope: only that directory
+    assert.ok(!on(outside) && on(ws));
+    assert.ok(on(path.join(outside, 'sub')));
+    enablement(t, '{not json');
+    assert.ok(on(outside));
+    // rules are also checked against the realpath of cwd
+    const link = path.join(t.tmp, 'link');
+    fs.symlinkSync(t.cwd, link);
+    enablement(t, { 'demo-ext': { overrides: [`!${t.cwd}/`] } });
+    assert.ok(!on(link));
+  } finally { t.done(); }
+});
+
+test('extension skills may not symlink outside their extension; linked extension dirs are allowed', () => {
+  const t = setup();
+  try {
+    const root = addExt(t, 'demo', 'demo-ext', []);
+    const outside = path.join(t.tmp, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'SKILL.md'), fm('escaped', 'x'));
+    fs.mkdirSync(path.join(root, 'skills'), { recursive: true });
+    fs.symlinkSync(outside, path.join(root, 'skills', 'escaped'));
+    const d = t.add('', 'linkfile', null, root);
+    fs.writeFileSync(path.join(t.tmp, 'o.md'), fm('linkfile', 'x'));
+    fs.symlinkSync(path.join(t.tmp, 'o.md'), path.join(d, 'SKILL.md'));
+    const linked = path.join(t.tmp, 'linked-src');
+    writeJson(path.join(linked, 'qwen-extension.json'), { name: 'linked' });
+    fs.mkdirSync(path.join(linked, 'skills', 'ok'), { recursive: true });
+    fs.writeFileSync(path.join(linked, 'skills', 'ok', 'SKILL.md'), fm('ok', 'fine'));
+    fs.symlinkSync(linked, path.join(t.home, '.qwen', 'extensions', 'linked'));
+    const { skills, warnings } = discoverSkills({ cwd: t.cwd, home: t.home });
+    assert.deepEqual([...skills.keys()], ['linked:ok']);
+    assert.ok(warnings.some((w) => w.includes('leaves the extension')));
+    assert.ok(warnings.some((w) => w.includes('leaves the skill directory')));
+  } finally { t.done(); }
+});

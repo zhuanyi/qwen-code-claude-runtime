@@ -79,4 +79,6 @@ regular text files of at most 256 KB whose real path stays inside the skill dire
 escapes). A project skill folder, or its `SKILL.md`, that symlinks outside the project or skill directory is
 skipped, so a repository cannot make the server read files elsewhere on disk. Project skills are repository-provided instructions, at the same trust level as `CLAUDE.md`. Scripts they
 mention run through Claude's own tools and permission rules. The server name is reserved; a user MCP server with the same
-name is dropped. Disable it with `QCR_SKILLS=off`.
+name is dropped. Extra skill directories (`skills.directories`) are honoured only from the user's `~/.qwen/settings.json`; the same key in a
+project settings file is ignored with a warning. Extension skills must stay inside their extension directory (the
+extension directory itself may be a symlink made by `qwen extensions link`). Disable it with `QCR_SKILLS=off`.

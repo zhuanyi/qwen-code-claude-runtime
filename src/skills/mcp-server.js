@@ -47,7 +47,7 @@ function callTool({ cwd, home }, params) {
     if (!skill) throw new Error(`unknown skill: ${args.name.slice(0, 60)}`);
     if (name === 'qwen_skill_file') return { content: [{ type: 'text', text: readSkillFile(skill, args.path) }] };
     const files = listSkillFiles(skill);
-    const text = `# Skill: ${skill.name}\nBase directory: ${skill.dir}\n\n${skill.body}` +
+    const text = `# Skill: ${skill.name}\n${skill.ext ? `Extension: ${skill.ext}\n` : ''}Base directory: ${skill.dir}\n\n${skill.body}` +
       (files.length ? `\n\nSupporting files:\n${files.map((f) => `- ${f}`).join('\n')}` : '');
     return { content: [{ type: 'text', text }] };
   } catch (e) {
