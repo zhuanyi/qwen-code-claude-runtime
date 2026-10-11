@@ -60,3 +60,24 @@ test('rate limit, permission denials and error results', () => {
   assert.equal(pd.find((e) => e.type === 'tool_end').isError, true);
   assert.equal(pd.at(-1).permissionDenials[0].tool_name, 'Bash');
 });
+
+test('streamed text without ids is not duplicated by the assistant event', () => {
+  const ev = parse([
+    JSON.stringify({ type: 'stream_event', event: { type: 'message_start', message: { usage: { input_tokens: 1 } } } }),
+    JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } } }),
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'hi' }] } }),
+  ]);
+  assert.deepEqual(ev.filter((e) => e.type === 'text').map((e) => e.text), ['hi']);
+  // a new message without deltas still falls back
+  const p = createStreamParser();
+  p.push(JSON.stringify({ type: 'stream_event', event: { type: 'message_start', message: { id: 'b' } } }));
+  assert.equal(p.push(JSON.stringify({ type: 'assistant', message: { id: 'b', content: [{ type: 'text', text: 'x' }] } })).length, 1);
+});
+
+test('message_delta without input_tokens emits no context_usage; synthetic text is skipped', () => {
+  const ev = parse([
+    JSON.stringify({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 5 } } }),
+    JSON.stringify({ type: 'assistant', message: { id: 's', model: '<synthetic>', content: [{ type: 'text', text: 'API Error' }] } }),
+  ]);
+  assert.deepEqual(ev, []);
+});

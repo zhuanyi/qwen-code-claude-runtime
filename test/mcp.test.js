@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadQwenMcpServers, parseJsonc, toClaudeMcpConfig } from '../src/runtime/mcp.js';
-import { withTempDir } from '../src/runtime/tempdir.js';
+import { cleanStaleTempDirs, withTempDir } from '../src/runtime/tempdir.js';
 
 const put = (base, text) => { fs.mkdirSync(path.join(base, '.qwen'), { recursive: true }); fs.writeFileSync(path.join(base, '.qwen', 'settings.json'), text); };
 
@@ -12,20 +12,29 @@ test('JSONC parsing', () => {
   assert.deepEqual(parseJsonc('{ // c\n "a": "x//y", /* b */ "b": [1,2,], }'), { a: 'x//y', b: [1, 2] });
 });
 
-test('loader: project overrides user, tolerates missing and broken files', async () => {
+test('loader: project servers are ignored unless opted in; user wins; project never trusted', async () => {
   await withTempDir(async (d) => {
     const home = path.join(d, 'h'), cwd = path.join(d, 'p');
     fs.mkdirSync(home); fs.mkdirSync(cwd);
     assert.deepEqual(loadQwenMcpServers({ cwd, home }), { servers: {}, warnings: [] });
     put(home, '{"mcpServers":{"a":{"command":"x"},"b":{"command":"user"}}}');
-    put(cwd, '{ // project\n "mcpServers":{"b":{"command":"proj",},}}');
-    const r = loadQwenMcpServers({ cwd, home });
-    assert.equal(r.servers.a.command, 'x');
-    assert.equal(r.servers.b.command, 'proj');
+    put(cwd, '{ // project\n "mcpServers":{"b":{"command":"proj",},"c":{"command":"p","trust":true}}}');
+    const off = loadQwenMcpServers({ cwd, home });
+    assert.deepEqual(Object.keys(off.servers), ['a', 'b']);
+    assert.equal(off.servers.b.command, 'user');
+    assert.equal(off.warnings.length, 1);
+    const on = loadQwenMcpServers({ cwd, home, projectMcp: true });
+    assert.equal(on.servers.a.command, 'x');
+    assert.equal(on.servers.b.command, 'user');
+    assert.equal(on.servers.c.command, 'p');
+    assert.ok(on.warnings.some((w) => /same name/.test(w)));
+    assert.deepEqual(toClaudeMcpConfig(on.servers).trustedNames, []);
+    put(home, '{"mcpServers":{"u":{"command":"x","trust":true}}}');
+    assert.deepEqual(toClaudeMcpConfig(loadQwenMcpServers({ cwd, home, projectMcp: true }).servers).trustedNames, ['u']);
     put(cwd, '{broken');
-    const r2 = loadQwenMcpServers({ cwd, home });
+    const r2 = loadQwenMcpServers({ cwd, home, projectMcp: true });
     assert.equal(r2.warnings.length, 1);
-    assert.equal(r2.servers.b.command, 'user');
+    assert.equal(r2.servers.u.command, 'x');
   });
 });
 
@@ -58,4 +67,14 @@ test('tempdir is private and removed', async () => {
   });
   assert.ok(!fs.existsSync(dir));
   assert.ok(dir.startsWith(os.tmpdir()));
+});
+
+test('stale qcr-* temp dirs are removed, fresh and foreign-named ones kept', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qcr-stale-root-'));
+  try {
+    const mk = (n, ageMs) => { const p = path.join(root, n); fs.mkdirSync(p); const t = new Date(Date.now() - ageMs); fs.utimesSync(p, t, t); return p; };
+    const old = mk('qcr-old', 2 * 86400000), fresh = mk('qcr-fresh', 1000), other = mk('other-old', 2 * 86400000);
+    cleanStaleTempDirs({ dir: root });
+    assert.ok(!fs.existsSync(old) && fs.existsSync(fresh) && fs.existsSync(other));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

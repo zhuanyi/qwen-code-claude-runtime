@@ -1,4 +1,5 @@
 // @ts-check
+import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { buildClaudeArgs, modelAliasFromId } from '../runtime/argv.js';
@@ -14,7 +15,7 @@ import { chunk, deniedLine, errorBody, errorLine, footerLine, toolFailedLine, to
  * @typedef {{bin: string, cwd: string, home: string, permissionMode?: string, allowedTools?: string[],
  *   keepAnthropicEnv?: boolean, mcp?: boolean, toolProgress?: string, footer?: boolean,
  *   sessions: import('./sessions.js').SessionStore, keepaliveMs?: number, commitMs?: number,
- *   env?: NodeJS.ProcessEnv}} HandlerConfig
+ *   env?: NodeJS.ProcessEnv, projectMcp?: boolean, maxConcurrent?: number, turnTimeoutMs?: number}} HandlerConfig
  */
 
 const NO_RETRY = { 'x-should-retry': 'false' };
@@ -34,15 +35,19 @@ function sendError(res, err) {
   return code;
 }
 
+const realOrResolved = (/** @type {string} */ p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
+const timeoutError = () => new ClaudeError('claude_timeout', 'Claude turn exceeded the time limit (QCR_TURN_TIMEOUT_MS)', 504);
+
 /** Drain events until the result; returns it plus bookkeeping. */
 async function collect(events) {
   /** @type {any} */ let result = null;
   let resetsAt = null;
+  let rejected = false;
   for await (const ev of events) {
-    if (ev.type === 'rate_limit') resetsAt = ev.resetsAt;
+    if (ev.type === 'rate_limit') { resetsAt = ev.resetsAt; rejected = ev.status === 'rejected'; }
     if (ev.type === 'result') result = ev;
   }
-  if (result?.isError) throw classifyError({ result, resetsAt });
+  if (result?.isError) throw classifyError({ result, resetsAt, rejected });
   return result;
 }
 
@@ -56,19 +61,40 @@ export function createHandler(cfg) {
   const permissionMode = cfg.permissionMode ?? 'manual';
 
   /** @returns {Promise<string|undefined>} error code, if any */
-  async function handleChatCompletion(/** @type {any} */ body, /** @type {import('node:http').ServerResponse} */ res, /** @type {AbortSignal} */ signal) {
+  let active = 0;
+
+  async function handleChatCompletion(/** @type {any} */ body, /** @type {import('node:http').ServerResponse} */ res, /** @type {AbortSignal} */ clientSignal) {
     const model = modelAliasFromId(body?.model);
     if (!model) return fail(res, 400, 'invalid_model', 'model must look like claude-code/<alias>');
     if (!Array.isArray(body.messages) || !body.messages.length) return fail(res, 400, 'invalid_request', 'messages must be a non-empty array');
     const dir = extractWorkingDir(body.messages);
-    if (dir && path.resolve(dir) !== path.resolve(cfg.cwd)) {
+    if (dir && realOrResolved(dir) !== realOrResolved(cfg.cwd)) {
       return fail(res, 400, 'cwd_mismatch', `Qwen Code is working in ${dir} but this shim runs Claude in ${cfg.cwd}. Start \`qcr serve\` in that directory or set QCR_CWD.`);
     }
+    const max = cfg.maxConcurrent ?? 4;
+    if (active >= max) {
+      res.writeHead(429, { 'content-type': 'application/json', ...NO_RETRY });
+      res.end(JSON.stringify(errorBody('qcr_busy', `qcr is already running ${active} Claude turns; try again when one finishes`, 'server_error')));
+      return 'qcr_busy';
+    }
+    active++;
+    // The turn signal fires on client abort or on the per-turn wall-clock limit.
+    const turn = new AbortController();
+    let timedOut = false;
+    const onAbort = () => turn.abort();
+    clientSignal.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => { timedOut = true; turn.abort(); }, cfg.turnTimeoutMs ?? 1800000);
+    const state = { signal: turn.signal, timedOut: () => timedOut };
     try {
-      return body.stream === true ? await mainTurn(body, model, res, signal) : await sideQuery(body, model, res, signal);
+      return body.stream === true ? await mainTurn(body, model, res, state) : await sideQuery(body, model, res, state);
     } catch (err) {
-      if (signal.aborted) return 'aborted';
+      if (timedOut) return sendError(res, timeoutError());
+      if (turn.signal.aborted) return 'aborted';
       return sendError(res, err);
+    } finally {
+      active--;
+      clearTimeout(timer);
+      clientSignal.removeEventListener('abort', onAbort);
     }
   }
 
@@ -77,20 +103,26 @@ export function createHandler(cfg) {
     return code;
   }
 
-  async function sideQuery(/** @type {any} */ body, /** @type {string} */ model, /** @type {any} */ res, /** @type {AbortSignal} */ signal) {
+  async function sideQuery(/** @type {any} */ body, /** @type {string} */ model, /** @type {any} */ res, /** @type {{signal: AbortSignal}} */ { signal }) {
     const system = body.messages.filter((/** @type {any} */ m) => m.role === 'system').map(messageText).join('\n\n');
-    const prompt = renderTranscript(body.messages, 200000, 100000)
-      + '\n\nAnswer the last user message above. Reply with your answer only.';
+    const lastUser = body.messages.findLastIndex((/** @type {any} */ m) => m.role === 'user');
+    if (lastUser < 0) return fail(res, 400, 'invalid_request', 'no user message to answer');
+    const earlier = renderTranscript(body.messages.slice(0, lastUser), 200000, 100000);
+    const prompt = (earlier ? earlier + '\n\n' : '') + messageText(body.messages[lastUser]);
     const fns = (body.tools ?? []).filter((/** @type {any} */ t) => t?.type === 'function' && t.function?.name);
     const tc = body.tool_choice;
     const forced = (tc === 'required' || tc?.type === 'function') && fns.length === 1 ? fns[0].function : null;
+    const schema = forced?.parameters;
+    if (schema !== undefined && (typeof schema !== 'object' || schema === null || Array.isArray(schema) || JSON.stringify(schema).length > 65536)) {
+      throw new ConfigError('function.parameters must be a JSON schema object of at most 64KB');
+    }
 
     const result = await withTempDir(async (_dir, write) => {
       const systemPromptFile = await write('system.txt', system || 'You are a helpful assistant.');
-      const args = buildClaudeArgs({ model, permissionMode, side: { systemPromptFile, jsonSchema: forced?.parameters } });
+      const args = buildClaudeArgs({ model, permissionMode, side: { systemPromptFile, jsonSchema: schema } });
       return collect(runClaude({ ...base(), args, prompt, signal }).events);
     });
-    if (!result) throw classifyError({ stderr: 'claude produced no result' });
+    if (!result) throw classifyError({});
 
     const usage = { prompt_tokens: sumInput(result.usage), completion_tokens: result.usage.outputTokens,
       total_tokens: sumInput(result.usage) + result.usage.outputTokens };
@@ -109,7 +141,7 @@ export function createHandler(cfg) {
       model: body.model, choices: [{ index: 0, message, finish_reason: finish }], usage, x_claude_cost_usd: result.costUsd });
   }
 
-  async function mainTurn(/** @type {any} */ body, /** @type {string} */ model, /** @type {import('node:http').ServerResponse} */ res, /** @type {AbortSignal} */ signal) {
+  async function mainTurn(/** @type {any} */ body, /** @type {string} */ model, /** @type {import('node:http').ServerResponse} */ res, /** @type {{signal: AbortSignal, timedOut: () => boolean}} */ { signal, timedOut }) {
     const { prefix, tail } = splitForResume(body.messages);
     if (!tail.length) return fail(res, 400, 'invalid_request', 'no user message to answer');
     const fp = fingerprint(prefix);
@@ -148,7 +180,7 @@ export function createHandler(cfg) {
         const allowedTools = [...(cfg.allowedTools ?? [])];
         let mcpConfigPath;
         if (cfg.mcp !== false) {
-          const loaded = loadQwenMcpServers({ cwd: cfg.cwd, home: cfg.home });
+          const loaded = loadQwenMcpServers({ cwd: cfg.cwd, home: cfg.home, projectMcp: cfg.projectMcp === true });
           const conv = toClaudeMcpConfig(loaded.servers);
           for (const w of [...loaded.warnings, ...conv.warnings]) console.error(`[qcr] ${w}`);
           if (Object.keys(conv.config.mcpServers).length) {
@@ -172,8 +204,9 @@ export function createHandler(cfg) {
       cfg.sessions.set(fingerprint([...body.messages, { role: 'assistant', content: emitted }]), result.sessionId);
       finish(finalUsage, result.costUsd);
       return code;
-    } catch (err) {
-      if (signal.aborted) { res.end(); return 'aborted'; }
+    } catch (e) {
+      if (signal.aborted && !timedOut()) { res.end(); return 'aborted'; }
+      const err = timedOut() ? timeoutError() : e;
       if (!committed) { cleanup(); return sendError(res, err); }
       code = err instanceof ClaudeError ? err.code : 'claude_failed';
       content(errorLine(redact(/** @type {any} */ (err)?.message ?? 'error')));
@@ -187,6 +220,7 @@ export function createHandler(cfg) {
     async function runTurn(args, prompt) {
       let ctx = null;
       let resetsAt = null;
+      let rejected = false;
       /** @type {any} */ let result = null;
       for await (const ev of runClaude({ ...base(), args, prompt, signal }).events) {
         switch (ev.type) {
@@ -195,12 +229,12 @@ export function createHandler(cfg) {
           case 'tool_start': if (toolProgress === 'content') content(toolStartLine(ev.name, ev.summary)); break;
           case 'tool_end': if (toolProgress === 'content' && ev.isError) content(toolFailedLine(ev.name)); break;
           case 'context_usage': ctx = ev; break;
-          case 'rate_limit': resetsAt = ev.resetsAt; break;
+          case 'rate_limit': resetsAt = ev.resetsAt; rejected = ev.status === 'rejected'; break;
           case 'result': result = ev; break;
         }
       }
-      if (!result) throw classifyError({ stderr: 'claude produced no result' });
-      if (result.isError) throw classifyError({ result, resetsAt });
+      if (!result) throw classifyError({});
+      if (result.isError) throw classifyError({ result, resetsAt, rejected });
       const names = [...new Set(result.permissionDenials.map((/** @type {any} */ d) => d.tool_name).filter(Boolean))];
       if (names.length) content(deniedLine(/** @type {string[]} */ (names)));
       if (cfg.footer !== false) content(footerLine(result.numTurns, result.costUsd));

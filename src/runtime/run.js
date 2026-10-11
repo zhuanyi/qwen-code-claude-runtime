@@ -4,6 +4,7 @@ import { createStreamParser } from './parser.js';
 import { classifyError } from './errors.js';
 
 const GRACE_MS = 3000;
+const PIPE_GRACE_MS = 2000;
 
 /**
  * Spawn `claude` (no shell), send one stream-json user message on stdin, yield normalized events.
@@ -22,7 +23,9 @@ export function runClaude({ bin, args, cwd, env, prompt, signal }) {
   child.stdin?.on('error', () => {}); // EPIPE when the child exits early
   child.stdin?.end(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
 
+  /** @type {(v: {exitCode: number|null, stderr: string}) => void} */ let resolveDone = () => {};
   const done = new Promise((resolve) => {
+    resolveDone = resolve;
     child.on('error', (e) => { spawnError = e; exited = true; resolve({ exitCode: null, stderr }); });
     child.on('close', (code) => { exited = true; timers.forEach(clearTimeout); resolve({ exitCode: code, stderr }); });
   });
@@ -53,6 +56,15 @@ export function runClaude({ bin, args, cwd, env, prompt, signal }) {
   });
   child.stdout.on('end', () => { if (buf) queue.push(buf); buf = ''; ended = true; wake?.(); });
   child.on('error', () => { ended = true; wake?.(); });
+  // A grandchild may keep the pipes open after claude exits; stop waiting for 'end'/'close' after a short grace.
+  child.on('exit', (code) => {
+    exited = true;
+    const t = setTimeout(() => {
+      if (!ended) { if (buf) queue.push(buf); buf = ''; ended = true; child.stdout.destroy(); wake?.(); }
+      resolveDone({ exitCode: code, stderr });
+    }, PIPE_GRACE_MS);
+    t.unref();
+  });
 
   async function* events() {
     const parser = createStreamParser();

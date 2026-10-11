@@ -61,3 +61,11 @@ logs — **pass** for logs (client error bodies could leak secrets, see B2).
 
 Review rounds: one review round plus one fix round. No extra review round was needed: every finding had a
 targeted fix and test, and the full suite was re-run (see the PR description for the final count).
+
+## 4. Verification after fixes
+
+* `npm test`: **58/58 pass** (run twice). The tests use only `test/fake-claude.js`.
+* One real smoke test in the build sandbox, run against the real `claude` 2.1.296 (haiku): `qcr serve` plus two
+  streamed chat-completion requests sent with curl, **not** through Qwen Code. It showed streamed text, a
+  `⚙ Read` progress line, the cost footer, and per-request (not cumulative) `prompt_tokens`. Turn 2 answered
+  from turn 1's context. The full Qwen Code UI flow is still the manual checklist in `docs/E2E.md`.

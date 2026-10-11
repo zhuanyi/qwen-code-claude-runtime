@@ -61,3 +61,12 @@ test('env scrubbing', () => {
   assert.deepEqual(buildChildEnv(src, { keepAnthropicEnv: true }),
     { ANTHROPIC_API_KEY: 'k', ANTHROPIC_AUTH_TOKEN: 't', ANTHROPIC_BASE_URL: 'u', PATH: '/bin' });
 });
+
+test('env scrubbing removes every ANTHROPIC_* and cloud-provider flag unless kept', () => {
+  const src = { ANTHROPIC_MODEL: 'm', ANTHROPIC_CUSTOM_HEADERS: 'h', CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_USE_VERTEX: '1',
+    CLAUDE_CODE_USE_FOUNDRY: '1', QCR_TOKEN: 'q', PATH: '/bin' };
+  assert.deepEqual(buildChildEnv(src), { PATH: '/bin' });
+  const kept = buildChildEnv(src, { keepAnthropicEnv: true });
+  assert.equal(Object.keys(kept).length, 6);
+  assert.ok(!('QCR_TOKEN' in kept));
+});
