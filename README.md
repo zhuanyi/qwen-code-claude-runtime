@@ -33,8 +33,10 @@ Qwen Code already supports. Qwen Code needs no patch. For each turn, `qcr` does 
 * Keeps the conversation going across turns: later turns use `claude --resume <id> --fork-session`. When Claude
   joins a conversation that already has history (for example after you switch from a Qwen model), the earlier
   history is passed to it as quoted context.
-* Passes your Qwen `mcpServers` (from `~/.qwen/settings.json` and `<project>/.qwen/settings.json`) to
-  `claude --mcp-config`. Servers you marked `"trust": true` in Qwen are pre-allowed for Claude.
+* Passes your Qwen `mcpServers` from `~/.qwen/settings.json` to `claude --mcp-config`. Servers you marked
+  `"trust": true` there are pre-allowed for Claude. Project-level `<project>/.qwen/settings.json` servers are
+  used only when you set `QCR_PROJECT_MCP=1`: a cloned repository could otherwise make `claude` start arbitrary
+  commands. Project servers are never auto-trusted.
 * Turns failures into clear errors: `claude` not installed, not logged in, quota exhausted (with the reset time),
   unknown model.
 
@@ -95,9 +97,12 @@ caps a single stream at 15 minutes by default.
 | `QCR_PERMISSION_MODE` | `manual` | `manual`, `acceptEdits` or `plan`. `bypassPermissions` is **refused** |
 | `QCR_ALLOWED_TOOLS` | – | Extra `--allowedTools` rules, comma-separated, e.g. `Edit,Bash(npm test)` |
 | `QCR_MCP` | on | `off` stops passing Qwen MCP servers to Claude |
+| `QCR_PROJECT_MCP` | off | `1` also passes `<project>/.qwen/settings.json` MCP servers (never auto-trusted) |
+| `QCR_MAX_CONCURRENCY` | `4` | Maximum simultaneous `claude` turns. Further requests get `429 qcr_busy` |
+| `QCR_TURN_TIMEOUT_MS` | `1800000` | Wall-clock limit per turn |
 | `QCR_TOOL_PROGRESS` | `content` | `off` hides the tool progress lines |
 | `QCR_FOOTER` | on | `off` hides the cost footer |
-| `QCR_KEEP_ANTHROPIC_ENV` | – | `1` keeps `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` for the child. By default they are removed so that `claude` uses your subscription login rather than a key exported for something else |
+| `QCR_KEEP_ANTHROPIC_ENV` | – | `1` keeps all `ANTHROPIC_*` and `CLAUDE_CODE_USE_{BEDROCK,VERTEX,FOUNDRY}` variables for the child. By default they are removed so that `claude` uses your subscription login rather than a key or provider set for something else |
 
 **Permissions:** with `-p`, nobody can answer Claude's permission prompts, so any action that would prompt is
 denied (`--permission-prompts none`). Denials are reported in the reply with a hint. Allow what you need with
