@@ -1,0 +1,10 @@
+{"kind":"turn_started"}
+{"kind":"turn_phase","text":"working","phase":"working"}
+{"kind":"user_message","messageId":"01M4P0TB45MK36NGGFGG8Z2HDH","text":"ERR429 hi"}
+{"kind":"stream_attempt","messageId":"01M4P0TB46M1Y08KS1Q87J4PXB","attemptId":"01M4P0TB46M1Y08KS1Q87J4PXB","streamAttempt":{"id":"01M4P0TB46M1Y08KS1Q87J4PXB","action":"begin","attempt":1,"max":4}}
+{"kind":"stream_attempt","messageId":"01M4P0TB46M1Y08KS1Q87J4PXB","attemptId":"01M4P0TB46M1Y08KS1Q87J4PXB","streamAttempt":{"id":"01M4P0TB46M1Y08KS1Q87J4PXB","action":"discard","attempt":1,"max":4,"reason":"headers"}}
+{"kind":"retrying","recovery":{"phase":"headers","reason":"rate_limit_error","next_attempt_at":1791740425304},"retryAttempt":1,"retryMax":3,"retryScope":"stream"}
+{"kind":"stream_attempt","messageId":"01M4P0TD2RW3GVTKDY337323FB","attemptId":"01M4P0TD2RW3GVTKDY337323FB","streamAttempt":{"id":"01M4P0TD2RW3GVTKDY337323FB","action":"begin","attempt":2,"max":4}}
+{"kind":"stream_attempt","messageId":"01M4P0TD2RW3GVTKDY337323FB","attemptId":"01M4P0TD2RW3GVTKDY337323FB","streamAttempt":{"id":"01M4P0TD2RW3GVTKDY337323FB","action":"discard","attempt":2,"max":4,"reason":"headers"}}
+{"kind":"retrying","recovery":{"phase":"headers","reason":"rate_limit_error","next_attempt_at":1791740429306,"waited_ms":2000},"retryAttempt":2,"retryMax":3,"retryScope":"stream"}
+{"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":5926,"num_turns":0,"result":"context canceled","session_id":"20261011-174023.282423883-mock-model","cost_complete":false,"display_complete":false,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}

@@ -1,11 +1,20 @@
 // @ts-check
-export class ClaudeError extends Error {
+/** An agent CLI failure with a stable client-facing `code` and HTTP status. */
+export class BackendError extends Error {
   /** @param {string} code @param {string} message @param {number} httpStatus */
   constructor(code, message, httpStatus) {
     super(message);
-    this.name = 'ClaudeError';
+    this.name = 'BackendError';
     this.code = code;
     this.httpStatus = httpStatus;
+  }
+}
+
+export class ClaudeError extends BackendError {
+  /** @param {string} code @param {string} message @param {number} httpStatus */
+  constructor(code, message, httpStatus) {
+    super(code, message, httpStatus);
+    this.name = 'ClaudeError';
   }
 }
 

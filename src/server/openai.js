@@ -16,4 +16,5 @@ export const deniedLine = (/** @type {string[]} */ names) =>
   `\n> ⛔ Claude was denied: ${names.join(', ')}. Allow them via QCR_PERMISSION_MODE=acceptEdits or QCR_ALLOWED_TOOLS.\n`;
 export const footerLine = (/** @type {number} */ turns, /** @type {number} */ cost) =>
   `\n\n_claude-code · ${turns} turns · $${cost.toFixed(4)}_`;
+export const noticeLine = (/** @type {string} */ text) => `\n> ↻ ${text}\n`;
 export const errorLine = (/** @type {string} */ message) => `\n\n> ⚠ ${message}\n`;

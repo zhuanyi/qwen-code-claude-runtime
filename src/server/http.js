@@ -5,7 +5,6 @@ import { createHandler } from './handler.js';
 import { errorBody } from './openai.js';
 
 const MAX_BODY = 8 * 1024 * 1024;
-const MODELS = ['sonnet', 'opus', 'haiku'].map((a) => ({ id: `claude-code/${a}`, object: 'model', owned_by: 'claude-code' }));
 
 /**
  * @param {import('./handler.js').HandlerConfig} cfg
@@ -13,6 +12,7 @@ const MODELS = ['sonnet', 'opus', 'haiku'].map((a) => ({ id: `claude-code/${a}`,
  */
 export async function startServer(cfg, { port = 8787, host = '127.0.0.1', token, log = console.error }) {
   const handler = createHandler(cfg);
+  const MODELS = handler.models.map((id) => ({ id, object: 'model', owned_by: id.split('/')[0] }));
   const want = Buffer.from(`Bearer ${token}`);
   const server = http.createServer(async (req, res) => {
     const start = Date.now();
