@@ -92,14 +92,16 @@ caps a single stream at 15 minutes by default.
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `QCR_BACKEND` | `claude` | Agent CLI that runs each turn: `claude` (Claude Code) or `reasonix` ([Reasonix](#using-reasonix)) |
 | `QCR_PORT` | `8787` | Listen port (always `127.0.0.1`) |
 | `QCR_TOKEN` | generated | Bearer token. Without it, a token is generated once into `~/.config/qwen-claude-runtime/token` (0600) |
 | `QCR_CWD` | current dir | Working directory for `claude`. Requests from a Qwen session in a different directory are refused |
 | `QCR_CLAUDE_BIN` | `claude` | Path to the official Claude Code binary |
-| `QCR_PERMISSION_MODE` | `manual` | `manual`, `acceptEdits` or `plan`. `bypassPermissions` is **refused** |
-| `QCR_ALLOWED_TOOLS` | – | Extra `--allowedTools` rules, comma-separated, e.g. `Edit,Bash(npm test)` |
-| `QCR_MCP` | on | `off` stops passing Qwen MCP servers to Claude |
-| `QCR_SKILLS` | on | `off` stops exposing Qwen skills to Claude (the `qwen-skills` MCP server) |
+| `QCR_REASONIX_BIN` | `reasonix` | Path to the Reasonix binary (`QCR_BACKEND=reasonix`) |
+| `QCR_PERMISSION_MODE` | `manual` | `manual`, `acceptEdits` or `plan` (`plan` is claude-only). `bypassPermissions` and other auto-approve modes are **refused** |
+| `QCR_ALLOWED_TOOLS` | – | Extra allow rules for the backend's own tool names, comma-separated, e.g. `Edit,Bash(npm test)` for claude or `write_file,bash(npm test)` for reasonix |
+| `QCR_MCP` | on | `off` stops passing Qwen MCP servers to Claude (claude only) |
+| `QCR_SKILLS` | on | `off` stops exposing Qwen skills to Claude (the `qwen-skills` MCP server; claude only) |
 | `QCR_PROJECT_MCP` | off | `1` also passes `<project>/.qwen/settings.json` MCP servers (never auto-trusted) |
 | `QCR_MAX_CONCURRENCY` | `4` | Maximum simultaneous `claude` turns. Further requests get `429 qcr_busy` |
 | `QCR_TURN_TIMEOUT_MS` | `1800000` | Wall-clock limit per turn |
@@ -110,6 +112,36 @@ caps a single stream at 15 minutes by default.
 **Permissions:** with `-p`, nobody can answer Claude's permission prompts, so any action that would prompt is
 denied (`--permission-prompts none`). Denials are reported in the reply with a hint. Allow what you need with
 `QCR_ALLOWED_TOOLS`, your Claude settings, or `QCR_PERMISSION_MODE=acceptEdits`.
+
+## Using Reasonix
+
+[Reasonix](https://github.com/esengine/DeepSeek-Reasonix) (npm `reasonix`, tested with 1.38.7) is a DeepSeek-based coding
+agent CLI. Only 1.38.7 has been verified (npm's `latest` is now a 2.x release, which is untested).
+With `QCR_BACKEND=reasonix`, `qcr` runs each turn with
+`reasonix -p --output-format stream-json --model <m> --permission-mode <mode> --dir <cwd>` (prompt on stdin) instead
+of `claude`. Everything on the Qwen Code side (streaming, progress lines, usage, `[DONE]`, `qcr_busy`, resume) works
+the same way.
+
+```bash
+npm i -g reasonix@1.38.7 && reasonix setup   # or export DEEPSEEK_API_KEY=... where qcr runs
+cd ~/my-project
+QCR_BACKEND=reasonix qcr serve
+```
+
+Use model ids `reasonix/<model>` in Qwen Code's `modelProviders` (for example `reasonix/deepseek-flash` or
+`reasonix/deepseek-pro`; any model your Reasonix config accepts works). Later turns run
+`reasonix … --resume <session id> --copy`, so each turn continues a copy of the previous session and the original is
+never modified.
+
+Differences from the Claude backend:
+
+* Reasonix uses its own login/config (`DEEPSEEK_API_KEY` or `reasonix setup`). `qcr` does not read or forward the key;
+  `reasonix` inherits the environment `qcr` runs in.
+* Qwen MCP passthrough and the `qwen-skills` server are not used. Configure MCP servers with `reasonix mcp`.
+* `QCR_PERMISSION_MODE=plan` is refused (Reasonix only plans interactively). In `manual`, anything that needs
+  approval (such as a file write) is denied and reported with a hint; `acceptEdits` allows file edits.
+* The footer shows Reasonix's cost and currency only when Reasonix reports a complete cost.
+* While Reasonix retries a rate-limited or failing provider request, a `> ↻ Reasonix is retrying …` line is shown.
 
 ## Known gaps (MVP)
 

@@ -2,7 +2,7 @@
 /** @typedef {{type: string, [k: string]: any}} Event */
 
 /** Single-line digest of a tool input, max 80 chars. @param {any} input */
-function summarize(input) {
+export function summarize(input) {
   if (!input || typeof input !== 'object') return '';
   for (const k of ['file_path', 'path', 'pattern', 'command', 'url', 'description']) {
     if (typeof input[k] === 'string' && input[k]) {
