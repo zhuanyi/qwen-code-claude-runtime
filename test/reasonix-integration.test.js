@@ -27,9 +27,13 @@ function sandbox() {
   return { tmp, bin, cwd, logs, PATH: `${bin}${path.delimiter}${process.env.PATH}` };
 }
 
+/** process.env.PATH minus every dir that holds `bin`, so a real install on the dev machine can't leak into "not on PATH" tests. */
+const pathWithout = (bin) => (process.env.PATH ?? '').split(path.delimiter)
+  .filter((d) => ![bin, `${bin}.cmd`, `${bin}.exe`].some((n) => fs.existsSync(path.join(d, n)))).join(path.delimiter);
+
 async function boot({ fake = {}, cfg = {}, onPath = true, extraEnv = {} } = {}) {
   const sb = sandbox();
-  const env = { ...process.env, ...extraEnv, PATH: onPath ? sb.PATH : process.env.PATH, FAKE_REASONIX_ARGV_LOG: sb.logs.argv,
+  const env = { ...process.env, ...extraEnv, PATH: onPath ? sb.PATH : pathWithout('reasonix'), FAKE_REASONIX_ARGV_LOG: sb.logs.argv,
     FAKE_REASONIX_STDIN_LOG: sb.logs.stdin, FAKE_REASONIX_SESSION_ID: SID, FAKE_REASONIX_KNOWN_SESSIONS: SID,
     ...Object.fromEntries(Object.entries(fake).map(([k, v]) => [k === 'fixture' ? 'FAKE_REASONIX_FIXTURE' : 'FAKE_REASONIX_' + k, k === 'fixture' ? fixture(v) : v])) };
   const backend = createBackend('reasonix', { permissionMode: cfg.permissionMode, cwd: sb.cwd });
