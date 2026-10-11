@@ -3,13 +3,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildClaudeArgs } from '../src/runtime/argv.js';
+import { BACKENDS, createBackend } from '../src/backends/index.js';
 import { cleanStaleTempDirs } from '../src/runtime/tempdir.js';
 import { SessionStore } from '../src/server/sessions.js';
 import { startServer } from '../src/server/http.js';
 import { loadOrCreateToken, tokenPath } from '../src/server/token.js';
 
-const HELP = `qcr - run Qwen Code turns on your local Claude Code CLI
+const HELP = `qcr - run Qwen Code turns on your local Claude Code (or Reasonix) CLI
 
 Usage:
   qcr serve [--port N]   start the local OpenAI-compatible shim (default port 8787)
@@ -17,7 +17,7 @@ Usage:
   qcr token              print the shim bearer token (use it as the API key in Qwen Code)
   qcr --help
 
-Environment: QCR_PORT, QCR_CLAUDE_BIN, QCR_CWD, QCR_PERMISSION_MODE (manual|acceptEdits|plan),
+Environment: QCR_BACKEND (claude|reasonix, default claude), QCR_PORT, QCR_CLAUDE_BIN, QCR_REASONIX_BIN, QCR_CWD, QCR_PERMISSION_MODE (manual|acceptEdits|plan),
 QCR_ALLOWED_TOOLS (comma list), QCR_KEEP_ANTHROPIC_ENV=1, QCR_MCP=off,
 QCR_SKILLS=off,
 QCR_TOOL_PROGRESS (content|off), QCR_FOOTER=off, QCR_TOKEN, QCR_PROJECT_MCP=1,
@@ -31,15 +31,15 @@ const posInt = (/** @type {string|undefined} */ v, /** @type {number} */ dflt, /
   return n;
 };
 
-/** Resolve the claude binary once to an absolute path (absolute PATH entries only). @param {string} bin */
-function resolveBin(bin) {
+/** Resolve the agent binary once to an absolute path (absolute PATH entries only). @param {string} bin @param {string} hint */
+function resolveBin(bin, hint) {
   if (bin.includes('/') || bin.includes(path.sep)) return path.resolve(bin);
   for (const d of (process.env.PATH ?? '').split(path.delimiter)) {
     if (!d || !path.isAbsolute(d)) continue;
     const p = path.join(d, bin);
     try { fs.accessSync(p, fs.constants.X_OK); if (fs.statSync(p).isFile()) return p; } catch { /* next */ }
   }
-  console.error(`warning: could not find "${bin}" in PATH; requests will fail with claude_not_found (set QCR_CLAUDE_BIN)`);
+  console.error(`warning: could not find "${bin}" in PATH; requests will fail until it is installed (or set ${hint})`);
   return bin;
 }
 
@@ -62,13 +62,20 @@ if (cmd === 'token') {
   if (toolProgress !== 'content' && toolProgress !== 'off') die('QCR_TOOL_PROGRESS must be content or off');
   const permissionMode = env.QCR_PERMISSION_MODE || 'manual';
   const allowedTools = (env.QCR_ALLOWED_TOOLS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-  try { buildClaudeArgs({ model: 'sonnet', permissionMode, allowedTools }); }
+  const backendName = env.QCR_BACKEND || 'claude';
+  if (!BACKENDS.includes(backendName)) die(`QCR_BACKEND must be one of: ${BACKENDS.join(', ')}`);
+  const cwd = path.resolve(env.QCR_CWD || process.cwd());
+  const backend = createBackend(backendName, { permissionMode, cwd });
+  try { backend.mainArgs({ model: backend.modelFromId(backend.models[0]) ?? '', allowedTools }); }
   catch (e) { die(`invalid configuration: ${/** @type {Error} */ (e).message}`); }
   const token = loadOrCreateToken({ env, home });
   cleanStaleTempDirs();
   const cfg = {
-    bin: resolveBin(env.QCR_CLAUDE_BIN || 'claude'),
-    cwd: env.QCR_CWD || process.cwd(),
+    bin: backendName === 'reasonix'
+      ? resolveBin(env.QCR_REASONIX_BIN || 'reasonix', 'QCR_REASONIX_BIN')
+      : resolveBin(env.QCR_CLAUDE_BIN || 'claude', 'QCR_CLAUDE_BIN'),
+    backend,
+    cwd,
     home,
     permissionMode,
     allowedTools,
@@ -83,7 +90,10 @@ if (cmd === 'token') {
     sessions: new SessionStore(),
   };
   const s = await startServer(cfg, { port, token });
-  console.error(`qcr listening on http://127.0.0.1:${s.port}/v1 (cwd: ${cfg.cwd})`);
+  console.error(`qcr listening on http://127.0.0.1:${s.port}/v1 (backend: ${backendName}, cwd: ${cfg.cwd})`);
+  if (backendName === 'reasonix' && (cfg.mcp || cfg.skills)) {
+    console.error('note: Qwen MCP passthrough and the qwen-skills server are claude-only; configure Reasonix MCP with `reasonix mcp`');
+  }
   console.error(env.QCR_TOKEN ? 'token: from QCR_TOKEN' : `token file: ${tokenPath(home)} (run \`qcr token\` to print it)`);
 } else {
   console.log(HELP);

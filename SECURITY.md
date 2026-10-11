@@ -44,6 +44,18 @@
 * `QCR_CLAUDE_BIN` / `claude` is resolved to an absolute path once at startup, ignoring relative `PATH`
   entries, so a `claude` planted in the project directory is never picked up.
 
+## Reasonix backend (`QCR_BACKEND=reasonix`)
+
+* `qcr` spawns only the `reasonix` binary (`QCR_REASONIX_BIN`), with `shell: false`, and sends the prompt on stdin.
+  It never reads or forwards the DeepSeek (or other provider) API key: `reasonix` reads it from its own environment
+  or config. The `ANTHROPIC_*` scrubbing described above applies to the claude backend only, because a Reasonix provider
+  may legitimately use such a variable. `reasonix` inherits `qcr`'s environment minus `QCR_TOKEN`.
+* The permission mode is limited to `manual` or `acceptEdits`. Reasonix's `auto`, `dontAsk` and `bypassPermissions` modes,
+  and the `-y`/`--auto`/`--yolo`/`--dangerously-skip-permissions`/`--takeover` flags, are refused by the argument builder.
+  Model names, session ids and allow rules are validated, and values starting with `-` are rejected.
+* The npm `reasonix` launcher does not forward signals to the native binary. `qcr` therefore starts `reasonix` in its
+  own process group and signals the whole group on abort or timeout, so no Reasonix process keeps running and spending.
+
 ## Untrusted repositories
 
 * MCP servers from `<project>/.qwen/settings.json` are ignored unless `QCR_PROJECT_MCP=1` is set, and are never

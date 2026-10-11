@@ -1,0 +1,1 @@
+{"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":2,"num_turns":0,"result":"provider \"deepseek-flash\": missing env DEEPSEEK_API_KEY","cost_complete":false,"display_complete":false,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}

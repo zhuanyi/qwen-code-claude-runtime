@@ -1,18 +1,19 @@
 // @ts-check
 import { spawn } from 'node:child_process';
-import { createStreamParser } from './parser.js';
-import { classifyError } from './errors.js';
 
 const GRACE_MS = 3000;
 const PIPE_GRACE_MS = 2000;
 
 /**
- * Spawn `claude` (no shell), send one stream-json user message on stdin, yield normalized events.
- * @param {{bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, prompt: string, signal?: AbortSignal}} p
+ * Spawn an agent CLI (no shell), write `stdin`, and yield the events its `parser` produces until a `result`.
+ * With `killGroup`, the child leads its own process group and termination signals the whole group; use it
+ * for CLIs launched through a wrapper that does not forward signals (the npm `reasonix` launcher).
+ * @param {{bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, stdin: string, signal?: AbortSignal,
+ *   parser: {push(line: string): any[]}, classify: (p: any) => Error, killGroup?: boolean}} p
  * @returns {{events: AsyncIterable<any>, done: Promise<{exitCode: number|null, stderr: string}>}}
  */
-export function runClaude({ bin, args, cwd, env, prompt, signal }) {
-  const child = spawn(bin, args, { cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+export function runAgent({ bin, args, cwd, env, stdin, signal, parser, classify, killGroup = false }) {
+  const child = spawn(bin, args, { cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: killGroup });
   let stderr = '';
   let spawnError = null;
   let exited = false;
@@ -21,7 +22,7 @@ export function runClaude({ bin, args, cwd, env, prompt, signal }) {
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (d) => { if (stderr.length < 65536) stderr = (stderr + d).slice(0, 65536); });
   child.stdin?.on('error', () => {}); // EPIPE when the child exits early
-  child.stdin?.end(JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n');
+  child.stdin?.end(stdin);
 
   /** @type {(v: {exitCode: number|null, stderr: string}) => void} */ let resolveDone = () => {};
   const done = new Promise((resolve) => {
@@ -31,10 +32,14 @@ export function runClaude({ bin, args, cwd, env, prompt, signal }) {
   });
 
   /** Ask politely now, force after the grace period. */
+  const kill = (/** @type {NodeJS.Signals} */ sig) => {
+    if (killGroup && child.pid) { try { process.kill(-child.pid, sig); return; } catch { /* group gone; fall back */ } }
+    child.kill(sig);
+  };
   const terminate = () => {
     if (exited) return;
-    child.kill('SIGTERM');
-    const t = setTimeout(() => { if (!exited) child.kill('SIGKILL'); }, GRACE_MS);
+    kill('SIGTERM');
+    const t = setTimeout(() => { if (!exited) kill('SIGKILL'); }, GRACE_MS);
     t.unref();
     timers.push(t);
   };
@@ -67,7 +72,6 @@ export function runClaude({ bin, args, cwd, env, prompt, signal }) {
   });
 
   async function* events() {
-    const parser = createStreamParser();
     let sawResult = false;
     try {
       for (;;) {
@@ -89,7 +93,7 @@ export function runClaude({ bin, args, cwd, env, prompt, signal }) {
       }
       const r = await done;
       if (signal?.aborted) return;
-      throw classifyError({ spawnError, stderr: r.stderr, exitCode: r.exitCode });
+      throw classify({ spawnError, stderr: r.stderr, exitCode: r.exitCode });
     } finally {
       if (!sawResult) terminate();
     }

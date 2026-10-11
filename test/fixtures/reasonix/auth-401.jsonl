@@ -1,0 +1,5 @@
+{"kind":"turn_started"}
+{"kind":"turn_phase","text":"working","phase":"working"}
+{"kind":"user_message","messageId":"01M4P0TASCMX1B7BFXVQX94YWW","text":"ERR401 hi"}
+{"kind":"stream_attempt","messageId":"01M4P0TASDE0BEP2PGNBNS6F00","attemptId":"01M4P0TASDE0BEP2PGNBNS6F00","streamAttempt":{"id":"01M4P0TASDE0BEP2PGNBNS6F00","action":"begin","attempt":1,"max":4}}
+{"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":84,"num_turns":0,"result":"authentication failed for provider \"mock · Chat Completions\" (HTTP 401): MOCK_API_KEY is invalid or expired — update it (in .env or your environment) and retry, or run `reasonix setup`","session_id":"20261011-174022.937043004-mock-model","cost_complete":false,"display_complete":false,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}
